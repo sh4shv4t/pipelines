@@ -59,19 +59,17 @@
 
 ## Local development setup
 
-- Always use a `.venv` virtual environment.
+- Use `uv` for dependency management and virtual environments.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
+# Install uv if not already available: https://docs.astral.sh/uv/getting-started/installation/
 
+# Sync workspace dependencies (creates .venv automatically)
+uv sync
+
+# Generate protobuf code
 make -C api python-dev
 make -C kubernetes_platform python-dev
-
-pip install -e api/v2alpha1/python --config-settings editable_mode=strict
-pip install -e sdk/python --config-settings editable_mode=strict
-pip install -e kubernetes_platform/python --config-settings editable_mode=strict
 ```
 
 ### Required CLI tools
@@ -152,14 +150,15 @@ KFP supports two main deployment modes:
 - Python (SDK):
 
 ```bash
-pip install -r sdk/python/requirements-dev.txt
-pytest -v sdk/python/kfp
+uv sync --extra dev
+uv run pytest -v sdk/python/kfp
 ```
 
 - Python (`kfp-kubernetes`):
 
 ```bash
-pytest -v kubernetes_platform/python/test
+uv sync --extra dev
+uv run pytest -v kubernetes_platform/python/test
 ```
 
 - Go (backend) unit tests only, excluding integration/API/Compiler/E2E tests:
@@ -288,7 +287,7 @@ The following files are generated; edit their sources and regenerate:
   - Generate: `make -C kubernetes_platform python` (or `make -C kubernetes_platform python-dev`)
 - Frontend API clients under `frontend/src/apis` and `frontend/src/apisv2beta1`
   - Sources: Swagger specs under `backend/api/**/swagger/*.json`
-  - Generate: `cd frontend && npm run apis` / `npm run apis:v2beta1`
+  - Generate: `cd frontend && npm run apis` / `npm run apis:v2beta1` (includes postprocess for TS 4.9 delete fix)
 - Frontend MLMD proto outputs under `frontend/src/third_party/mlmd/generated`
   - Sources: `third_party/ml-metadata/*.proto`
   - Generate: `cd frontend && npm run build:protos`
@@ -320,15 +319,15 @@ The KFP frontend is a React TypeScript application that provides the web UI for 
 
 ### Prerequisites
 
-- Node.js version specified in `frontend/.nvmrc` (currently v22.14.0)
+- Node.js version specified in `frontend/.nvmrc` (currently v22.19.0)
 - Java 8+ (required for `java -jar swagger-codegen-cli.jar` when generating API clients)
 - Use [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm) for Node version management:
 
   ```bash
   # With fnm (faster)
-  fnm install 22.14.0 && fnm use 22.14.0
+  fnm install 22.19.0 && fnm use 22.19.0
   # With nvm
-  nvm install 22.14.0 && nvm use 22.14.0
+  nvm install 22.19.0 && nvm use 22.19.0
   ```
 
 ### Setup and installation
@@ -346,7 +345,7 @@ Quick start for UI development without backend dependencies:
 
 ```bash
 npm run mock:api    # Start mock backend server on port 3001
-npm start           # Start React dev server on port 3000 (hot reload)
+npm start           # Start Vite dev server on port 3000 (hot reload)
 ```
 
 #### Local development with real cluster
@@ -369,7 +368,7 @@ For full integration testing against a real KFP deployment:
 2. **Multi-user mode**:
 
    ```bash
-   export REACT_APP_NAMESPACE=kubeflow-user-example-com
+   export VITE_NAMESPACE=kubeflow-user-example-com
    npm run build
    # Install mod-header Chrome extension for auth headers
    npm run start:proxy-and-server
@@ -379,23 +378,28 @@ For full integration testing against a real KFP deployment:
 
 - **React 16** with TypeScript
 - **Material-UI v3** for components
-- **React Router v4** for navigation
+- **React Router v5** for navigation
 - **Dagre** for graph layout visualization
 - **D3** for data visualization
-- **Jest + Enzyme** for testing
+- **Vitest + Testing Library** for UI testing
+- **Jest** for frontend server tests (UI tests migrated off Jest/Enzyme)
 - **Prettier + ESLint** for code formatting/linting
 - **Storybook** for component development
 - **Tailwind CSS** for utility-first styling
 
 ### Essential commands (frontend)
 
-- `npm start` - Start React dev server with hot reload (port 3000)
+- `npm start` - Start Vite dev server with hot reload (port 3000)
 - `npm run start:proxy-and-server` - Full development with cluster proxy
 - `npm run mock:api` - Start mock backend API server (port 3001)
 - `npm run build` - Production build
-- `npm run test` - Run unit tests
-- `npm run test -u` - Update snapshot tests
+- `npm run test` - Run Vitest UI tests (same as `test:ui`, with `LC_ALL` set)
+- `npm run test:ui` - Run Vitest UI tests
+- `npm run test:ui:coverage` - Run Vitest UI tests with coverage
+- `npm run test:ui:coverage:loop` - Run Vitest UI coverage with a capped worker count (stability loop)
+- `npm run test -u` - Update Vitest snapshots
 - `npm run lint` - Run ESLint
+- `npm run typecheck` - Run TypeScript typecheck (`tsc --noEmit`)
 - `npm run format` - Format code with Prettier
 - `npm run storybook` - Start Storybook on port 6006
 
@@ -423,11 +427,12 @@ The frontend includes several generated code components:
 
 ### Testing
 
-- **Unit tests**: `npm test` (Jest + Enzyme)
-- **Server tests**: `npm run test:server:coverage`
-- **Coverage**: `npm run test:coverage`
-- **CI pipeline**: `npm run test:ci` (format check + lint + test coverage)
-- **Snapshot tests**: Auto-update with `npm test -u`
+- **UI tests**: `npm run test:ui` or `npm test` (Vitest + Testing Library)
+- **Server tests**: `npm run test:server:coverage` (Jest)
+- **Coverage**: `npm run test:ui:coverage` (Vitest) + `npm run test:coverage` (Vitest UI + Jest server)
+- **Stability loop**: `npm run test:ui:coverage:loop` (Vitest coverage with capped workers)
+- **CI pipeline**: `npm run test:ci` (format check + lint + typecheck + Vitest UI coverage + Jest coverage)
+- **Snapshot tests**: Auto-update with `npm test -u` or `npm run test:ui -- -u` (Vitest)
 
 ## CI/CD (GitHub Actions)
 
@@ -518,24 +523,24 @@ golangci-lint run
 - Python SDK import/order and unused import cleanups:
 
 ```bash
-pip install -r sdk/python/requirements-dev.txt
-pycln --check sdk/python
-isort --check --profile google sdk/python
+uv sync --extra lint
+uv run pycln --check sdk/python
+uv run isort --check --profile google sdk/python
 ```
 
 - Python SDK formatting (YAPF + string fixer):
 
 ```bash
-pip install yapf pre_commit_hooks
-python3 -m pre_commit_hooks.string_fixer $(find sdk/python/kfp/**/*.py -type f)
-yapf --recursive --diff sdk/python/
+uv sync --extra lint
+uv run python -m pre_commit_hooks.string_fixer $(find sdk/python/kfp/**/*.py -type f)
+uv run yapf --recursive --diff sdk/python/
 ```
 
 - Python SDK docstring formatting:
 
 ```bash
-pip install docformatter
-docformatter --check --recursive sdk/python/ --exclude "compiler_test.py"
+uv sync --extra lint
+uv run docformatter --check --recursive sdk/python/ --exclude "compiler_test.py"
 ```
 
 ## Common agent workflows
@@ -552,11 +557,11 @@ docformatter --check --recursive sdk/python/ --exclude "compiler_test.py"
 
 ### Essential commands
 
-- Compile pipeline: `kfp dsl compile --py pipeline.py --output pipeline.yaml`
+- Compile pipeline: `uv run kfp dsl compile --py pipeline.py --output pipeline.yaml`
 - Generate protos: `make -C api python && make -C api golang`
 - Deploy local cluster (standalone): `make -C backend kind-cluster-agnostic`
 - Deploy local cluster (development) and run the API server in the IDE: `make -C backend dev-kind-cluster`
-- Run SDK tests: `pytest -v sdk/python/kfp`
+- Run SDK tests: `uv run pytest -v sdk/python/kfp`
 - Run backend unit tests: `go test -v $(go list ./backend/... | grep -v backend/test/)`
 - Run compiler tests: `ginkgo -v ./backend/test/compiler`
 - Run API tests: `ginkgo -v --label-filter="Smoke" ./backend/test/v2/api`
@@ -565,13 +570,14 @@ docformatter --check --recursive sdk/python/ --exclude "compiler_test.py"
   `yapf --recursive --diff sdk/python/ && pycln --check sdk/python && isort --check --profile google sdk/python`
 - Frontend dev server: `cd frontend && npm start`
 - Frontend with cluster: `cd frontend && npm run start:proxy-and-server`
-- Frontend tests: `cd frontend && npm test`
+- Frontend tests: `cd frontend && npm run test:ui` (Vitest) or `npm test` (same as `test:ui`)
 - Frontend formatting: `cd frontend && npm run format`
 - Generate frontend APIs: `cd frontend && npm run apis`
 
 ### Key environment variables
 
 - `_KFP_RUNTIME=true`: Disables SDK imports during task execution
+- `VITE_NAMESPACE=...`: Sets the target namespace for the frontend in multi-user mode
 - `LOCAL_API_SERVER=true`: Enables local API server testing mode when running integration tests on a Kind cluster
 
 ## Troubleshooting and pitfalls
@@ -583,7 +589,7 @@ docformatter --check --recursive sdk/python/ --exclude "compiler_test.py"
 - Frontend API generation requires `swagger-codegen-cli.jar` in PATH.
 - Frontend proto generation requires `protoc` and `protoc-gen-grpc-web` binaries.
 - Node version must match `.nvmrc`; use nvm/fnm to manage versions.
-- Frontend port conflicts: 3000 (React), 3001 (Node server), 3002 (API proxy), 6006 (Storybook).
+- Frontend port conflicts: 3000 (Vite), 3001 (Node server), 3002 (API proxy), 6006 (Storybook).
 
 ### Common error patterns and quick fixes
 
