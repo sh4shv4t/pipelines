@@ -61,6 +61,12 @@ UploadPipelineParams contains all the parameters to send to the API endpoint
 */
 type UploadPipelineParams struct {
 
+	/* CodeSourceURL.
+
+	   Optional URL to the pipeline source code.
+	*/
+	CodeSourceURL *string
+
 	// Description.
 	Description *string
 
@@ -72,6 +78,12 @@ type UploadPipelineParams struct {
 
 	// Namespace.
 	Namespace *string
+
+	/* Tags.
+
+	   JSON-encoded map of key-value pairs for pipeline tags.
+	*/
+	Tags *string
 
 	/* Uploadfile.
 
@@ -132,6 +144,17 @@ func (o *UploadPipelineParams) SetHTTPClient(client *http.Client) {
 	o.HTTPClient = client
 }
 
+// WithCodeSourceURL adds the codeSourceURL to the upload pipeline params
+func (o *UploadPipelineParams) WithCodeSourceURL(codeSourceURL *string) *UploadPipelineParams {
+	o.SetCodeSourceURL(codeSourceURL)
+	return o
+}
+
+// SetCodeSourceURL adds the codeSourceUrl to the upload pipeline params
+func (o *UploadPipelineParams) SetCodeSourceURL(codeSourceURL *string) {
+	o.CodeSourceURL = codeSourceURL
+}
+
 // WithDescription adds the description to the upload pipeline params
 func (o *UploadPipelineParams) WithDescription(description *string) *UploadPipelineParams {
 	o.SetDescription(description)
@@ -176,6 +199,17 @@ func (o *UploadPipelineParams) SetNamespace(namespace *string) {
 	o.Namespace = namespace
 }
 
+// WithTags adds the tags to the upload pipeline params
+func (o *UploadPipelineParams) WithTags(tags *string) *UploadPipelineParams {
+	o.SetTags(tags)
+	return o
+}
+
+// SetTags adds the tags to the upload pipeline params
+func (o *UploadPipelineParams) SetTags(tags *string) {
+	o.Tags = tags
+}
+
 // WithUploadfile adds the uploadfile to the upload pipeline params
 func (o *UploadPipelineParams) WithUploadfile(uploadfile runtime.NamedReadCloser) *UploadPipelineParams {
 	o.SetUploadfile(uploadfile)
@@ -194,6 +228,23 @@ func (o *UploadPipelineParams) WriteToRequest(r runtime.ClientRequest, reg strfm
 		return err
 	}
 	var res []error
+
+	if o.CodeSourceURL != nil {
+
+		// query param code_source_url
+		var qrCodeSourceURL string
+
+		if o.CodeSourceURL != nil {
+			qrCodeSourceURL = *o.CodeSourceURL
+		}
+		qCodeSourceURL := qrCodeSourceURL
+		if qCodeSourceURL != "" {
+
+			if err := r.SetQueryParam("code_source_url", qCodeSourceURL); err != nil {
+				return err
+			}
+		}
+	}
 
 	if o.Description != nil {
 
@@ -258,6 +309,23 @@ func (o *UploadPipelineParams) WriteToRequest(r runtime.ClientRequest, reg strfm
 		if qNamespace != "" {
 
 			if err := r.SetQueryParam("namespace", qNamespace); err != nil {
+				return err
+			}
+		}
+	}
+
+	if o.Tags != nil {
+
+		// query param tags
+		var qrTags string
+
+		if o.Tags != nil {
+			qrTags = *o.Tags
+		}
+		qTags := qrTags
+		if qTags != "" {
+
+			if err := r.SetQueryParam("tags", qTags); err != nil {
 				return err
 			}
 		}

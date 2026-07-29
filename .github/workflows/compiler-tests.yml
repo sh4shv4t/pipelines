@@ -29,11 +29,19 @@ on:
 
   pull_request:
     paths:
+      - '**/pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/compiler-tests.yml'
+      - '.github/actions/test-and-report/**'
       - 'backend/src/v2/compiler/**'
       - 'test_data/**'
       - '!**/*.md'
       - '!**/OWNERS'
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compiler-tests:
@@ -42,15 +50,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure Input Variables
         shell: bash
         id: configure
+        env:
+          DISPATCH_TEST_LABEL: ${{ inputs.test_label }}
         run: |
           TEST_LABEL=${{ env.TESTS_LABEL }}
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TEST_LABEL=${{ inputs.test_label }}
+            TEST_LABEL=$DISPATCH_TEST_LABEL
           fi
           echo "TEST_LABEL=$TEST_LABEL" >> "$GITHUB_OUTPUT"
 
@@ -63,3 +73,4 @@ jobs:
           test_label: ${{ steps.configure.outputs.TEST_LABEL }}
           python_version: ${{ env.PYTHON_VERSION }}
           report_name: "Workflow Compiler Tests"
+          skip_api_config: 'true'

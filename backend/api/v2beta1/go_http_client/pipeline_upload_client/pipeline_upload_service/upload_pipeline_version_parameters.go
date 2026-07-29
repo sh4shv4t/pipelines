@@ -61,6 +61,12 @@ UploadPipelineVersionParams contains all the parameters to send to the API endpo
 */
 type UploadPipelineVersionParams struct {
 
+	/* CodeSourceURL.
+
+	   Optional URL to the pipeline source code.
+	*/
+	CodeSourceURL *string
+
 	// Description.
 	Description *string
 
@@ -72,6 +78,12 @@ type UploadPipelineVersionParams struct {
 
 	// Pipelineid.
 	Pipelineid *string
+
+	/* Tags.
+
+	   JSON-encoded map of key-value pairs for pipeline version tags.
+	*/
+	Tags *string
 
 	/* Uploadfile.
 
@@ -132,6 +144,17 @@ func (o *UploadPipelineVersionParams) SetHTTPClient(client *http.Client) {
 	o.HTTPClient = client
 }
 
+// WithCodeSourceURL adds the codeSourceURL to the upload pipeline version params
+func (o *UploadPipelineVersionParams) WithCodeSourceURL(codeSourceURL *string) *UploadPipelineVersionParams {
+	o.SetCodeSourceURL(codeSourceURL)
+	return o
+}
+
+// SetCodeSourceURL adds the codeSourceUrl to the upload pipeline version params
+func (o *UploadPipelineVersionParams) SetCodeSourceURL(codeSourceURL *string) {
+	o.CodeSourceURL = codeSourceURL
+}
+
 // WithDescription adds the description to the upload pipeline version params
 func (o *UploadPipelineVersionParams) WithDescription(description *string) *UploadPipelineVersionParams {
 	o.SetDescription(description)
@@ -176,6 +199,17 @@ func (o *UploadPipelineVersionParams) SetPipelineid(pipelineid *string) {
 	o.Pipelineid = pipelineid
 }
 
+// WithTags adds the tags to the upload pipeline version params
+func (o *UploadPipelineVersionParams) WithTags(tags *string) *UploadPipelineVersionParams {
+	o.SetTags(tags)
+	return o
+}
+
+// SetTags adds the tags to the upload pipeline version params
+func (o *UploadPipelineVersionParams) SetTags(tags *string) {
+	o.Tags = tags
+}
+
 // WithUploadfile adds the uploadfile to the upload pipeline version params
 func (o *UploadPipelineVersionParams) WithUploadfile(uploadfile runtime.NamedReadCloser) *UploadPipelineVersionParams {
 	o.SetUploadfile(uploadfile)
@@ -194,6 +228,23 @@ func (o *UploadPipelineVersionParams) WriteToRequest(r runtime.ClientRequest, re
 		return err
 	}
 	var res []error
+
+	if o.CodeSourceURL != nil {
+
+		// query param code_source_url
+		var qrCodeSourceURL string
+
+		if o.CodeSourceURL != nil {
+			qrCodeSourceURL = *o.CodeSourceURL
+		}
+		qCodeSourceURL := qrCodeSourceURL
+		if qCodeSourceURL != "" {
+
+			if err := r.SetQueryParam("code_source_url", qCodeSourceURL); err != nil {
+				return err
+			}
+		}
+	}
 
 	if o.Description != nil {
 
@@ -258,6 +309,23 @@ func (o *UploadPipelineVersionParams) WriteToRequest(r runtime.ClientRequest, re
 		if qPipelineid != "" {
 
 			if err := r.SetQueryParam("pipelineid", qPipelineid); err != nil {
+				return err
+			}
+		}
+	}
+
+	if o.Tags != nil {
+
+		// query param tags
+		var qrTags string
+
+		if o.Tags != nil {
+			qrTags = *o.Tags
+		}
+		qTags := qrTags
+		if qTags != "" {
+
+			if err := r.SetQueryParam("tags", qTags); err != nil {
 				return err
 			}
 		}

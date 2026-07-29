@@ -5,16 +5,24 @@ on:
       - master
   pull_request:
     paths:
+      - '**/pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/validate-generated-files.yml'
+      - '.github/actions/setup-python-pip-cache/**'
+      - 'backend/api/Dockerfile'
+      - 'backend/api/Makefile'
       - 'backend/api/**/*.proto'
       - 'backend/api/**/go_http_client/**'
       - 'backend/api/**/go_client/**'
       - 'backend/api/**/python_http_client/**'
       - 'backend/api/**/swagger/**'
+      - 'api/Makefile'
       - 'api/**/*.proto'
       - 'api/**/*.go'
+      - 'kubernetes_platform/Makefile'
       - 'kubernetes_platform/**/*.proto'
       - 'kubernetes_platform/**/*.go'
+      - 'sdk/Makefile'
       - 'backend/src/crd/kubernetes/**/*.go'
       - 'manifests/kustomize/base/crds/*.yaml'
       - 'sdk/**/*.py'
@@ -22,25 +30,33 @@ on:
       - '!**/OWNERS'
       - 'VERSION'
 
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-generated-files:
     runs-on: ubuntu-latest
+    env:
+      USE_PREBUILT_IMAGE: false
     strategy:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: ./.github/actions/setup-go
+
+      - name: Setup Python with uv
+        uses: ./.github/actions/setup-python
         with:
-          go-version-file: go.mod
-      
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: 3.9
-          cache: 'pip'
+          python-version: '3.9'
+
+      - name: Set up Docker Buildx with caching
+        shell: bash
+        run: bash ./.github/resources/scripts/setup-buildx-with-retry.sh
 
       - name: Install protobuf dependencies & kfp-pipeline-spec
         id: install-protobuf-deps
@@ -88,12 +104,10 @@ jobs:
   validate-backwards-compabitiblity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+        uses: ./.github/actions/setup-go
 
       - name: Validate Go proto code backwards compatibility
         working-directory: ./backend/test/proto_tests

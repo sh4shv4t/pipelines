@@ -95,7 +95,7 @@ docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA:$MM_VER
 
 # 3rd-party images
 # ! Sync to the same MLMD version:
-# * backend/metadata_writer/requirements.in and requirements.txt
+# * backend/metadata_writer/Dockerfile
 # * frontend/src/mlmd/generated
 # * .cloudbuild.yaml and .release.cloudbuild.yaml
 # * manifests/kustomize/base/metadata/base/metadata-grpc-deployment.yaml
@@ -120,12 +120,12 @@ docker tag gcr.io/cloudsql-docker/gce-proxy:1.25.0 gcr.io/$PROJECT_ID/hosted/$CO
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/cloudsqlproxy:$SEM_VER
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/cloudsqlproxy:$MM_VER
 
-docker tag quay.io/argoproj/argoexec:v3.7.3 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$SEM_VER
-docker tag quay.io/argoproj/argoexec:v3.7.3 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$MM_VER
+docker tag quay.io/argoproj/argoexec:v4.0.5 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$SEM_VER
+docker tag quay.io/argoproj/argoexec:v4.0.5 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$MM_VER
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$SEM_VER
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoexecutor:$MM_VER
 
-docker tag quay.io/argoproj/workflow-controller:v3.7.3 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$SEM_VER
-docker tag quay.io/argoproj/workflow-controller:v3.7.3 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$MM_VER
+docker tag quay.io/argoproj/workflow-controller:v4.0.5 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$SEM_VER
+docker tag quay.io/argoproj/workflow-controller:v4.0.5 gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$MM_VER
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$SEM_VER
 docker push gcr.io/$PROJECT_ID/hosted/$COMMIT_SHA/argoworkflowcontroller:$MM_VER

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -26,6 +27,7 @@ import (
 	"github.com/kubeflow/pipelines/api/v2alpha1/go/pipelinespec"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
 	"github.com/kubeflow/pipelines/backend/src/v2/cacheutils"
+	"github.com/kubeflow/pipelines/backend/src/v2/common/plugins"
 	"github.com/kubeflow/pipelines/backend/src/v2/component"
 	"github.com/kubeflow/pipelines/backend/src/v2/config"
 	"github.com/kubeflow/pipelines/backend/src/v2/metadata"
@@ -76,6 +78,7 @@ func kubernetesPlatformOps(
 	var createdExecution *metadata.Execution
 	status := pb.Execution_FAILED
 	var pvcName string
+	taskPluginInfo := &plugins.TaskInfo{Name: opts.TaskName}
 	defer func() {
 		// We publish the execution, no matter this operartion succeeds or not
 		perr := publishDriverExecution(k8sClient, mlmd, ctx, createdExecution, outputParameters, nil, status)
@@ -84,8 +87,20 @@ func kubernetesPlatformOps(
 		} else if perr != nil {
 			err = fmt.Errorf("failed to publish driver execution: %w", perr)
 		}
+		taskPluginInfo.UpdateTaskInfoWithMetadata(status.String(), nil, nil)
+		dispatchErr := opts.PluginDispatcher.OnTaskEnd(ctx, taskPluginInfo)
+		if dispatchErr != nil {
+			glog.Errorf("failed to dispatch task end: %v", dispatchErr)
+		}
+
 	}()
 
+	pluginStartResult, dispatchErr := opts.PluginDispatcher.OnTaskStart(ctx, taskPluginInfo)
+	if dispatchErr != nil {
+		glog.Errorf("Failed to dispatch task start: %v", dispatchErr)
+	} else if pluginStartResult != nil {
+		ecfg.PluginCustomProperties = pluginStartResult.CustomProperties
+	}
 	switch opts.Container.Image {
 	case "argostub/createpvc":
 		pvcName, createdExecution, status, err = createPVC(ctx, k8sClient, *execution, opts, cacheClient, mlmd, ecfg)
@@ -695,6 +710,204 @@ func extendPodSpecPatch(
 		}
 	}
 
+	// Pre-populate admin-configured defaults into the patch so they:
+	// (a) survive strategic merge onto the compiled template, and
+	// (b) cause the user-value checks below to see them as "already set".
+	if opts.DefaultRunAsUser != nil || opts.DefaultRunAsGroup != nil || opts.DefaultRunAsNonRoot != nil {
+		if podSpec.Containers[0].SecurityContext == nil {
+			podSpec.Containers[0].SecurityContext = &k8score.SecurityContext{}
+		}
+		if opts.DefaultRunAsUser != nil {
+			v := *opts.DefaultRunAsUser
+			podSpec.Containers[0].SecurityContext.RunAsUser = &v
+		}
+		if opts.DefaultRunAsGroup != nil {
+			v := *opts.DefaultRunAsGroup
+			podSpec.Containers[0].SecurityContext.RunAsGroup = &v
+		}
+		if opts.DefaultRunAsNonRoot != nil {
+			v := *opts.DefaultRunAsNonRoot
+			podSpec.Containers[0].SecurityContext.RunAsNonRoot = &v
+		}
+	}
+
+	// Pre-populate the administrator-configured hostUsers default at the pod level
+	// only when no value is already present. Setting hostUsers to false places the
+	// pod in a dedicated Linux user namespace: UID 0 inside the pod maps to an
+	// unprivileged host UID, so root processes in the container are not root on
+	// the host. We set only when nil so that the post-processing guard below can
+	// detect and warn about user-supplied overrides.
+	if opts.DefaultHostUsers != nil && podSpec.HostUsers == nil {
+		v := *opts.DefaultHostUsers
+		podSpec.HostUsers = &v
+	}
+
+	// Apply container security context (PSS baseline compliant).
+	// User-specified identity fields (runAsUser, runAsGroup) are only applied
+	// when they are not already set by the platform/admin. If the compiler or
+	// an administrator has already configured these fields, the user-specified
+	// values are ignored and a warning is logged.
+	if userSecurityContext := kubernetesExecutorConfig.GetSecurityContext(); userSecurityContext != nil {
+		if podSpec.Containers[0].SecurityContext == nil {
+			podSpec.Containers[0].SecurityContext = &k8score.SecurityContext{}
+		}
+		existingSecurityContext := podSpec.Containers[0].SecurityContext
+		isCompilerHardened := existingSecurityContext.AllowPrivilegeEscalation != nil && !*existingSecurityContext.AllowPrivilegeEscalation
+		if userSecurityContext.RunAsUser != nil {
+			if existingSecurityContext.RunAsUser != nil {
+				glog.Warningf("Ignoring user-specified runAsUser (%d): security context already set by admin (runAsUser=%d)",
+					*userSecurityContext.RunAsUser, *existingSecurityContext.RunAsUser)
+			} else {
+				if isCompilerHardened && *userSecurityContext.RunAsUser == 0 {
+					glog.Warningf("Setting runAsUser=0 (root) on a container with hardened security context; consider using a non-root UID")
+				}
+				podSpec.Containers[0].SecurityContext.RunAsUser = userSecurityContext.RunAsUser
+			}
+		}
+		if userSecurityContext.RunAsGroup != nil {
+			if existingSecurityContext.RunAsGroup != nil {
+				glog.Warningf("Ignoring user-specified runAsGroup (%d): security context already set by admin (runAsGroup=%d)",
+					*userSecurityContext.RunAsGroup, *existingSecurityContext.RunAsGroup)
+			} else {
+				podSpec.Containers[0].SecurityContext.RunAsGroup = userSecurityContext.RunAsGroup
+			}
+		}
+		if userSecurityContext.RunAsNonRoot != nil {
+			if existingSecurityContext.RunAsNonRoot != nil {
+				glog.Warningf("Ignoring user-specified runAsNonRoot (%v): security context already set by admin (runAsNonRoot=%v)",
+					*userSecurityContext.RunAsNonRoot, *existingSecurityContext.RunAsNonRoot)
+			} else {
+				podSpec.Containers[0].SecurityContext.RunAsNonRoot = userSecurityContext.RunAsNonRoot
+			}
+		}
+		// Always drop all capabilities to comply with PSS baseline.
+		podSpec.Containers[0].SecurityContext.Capabilities = &k8score.Capabilities{
+			Drop: []k8score.Capability{"ALL"},
+		}
+	}
+
+	// Seed name set from existing containers to prevent collisions.
+	initContainerNames := make(map[string]bool)
+	for _, c := range podSpec.Containers {
+		initContainerNames[c.Name] = true
+	}
+	for _, c := range podSpec.InitContainers {
+		initContainerNames[c.Name] = true
+	}
+	for _, initContainer := range kubernetesExecutorConfig.GetInitContainers() {
+		if initContainer.GetName() == "" {
+			return fmt.Errorf("init container name must not be empty")
+		}
+		if initContainerNames[initContainer.GetName()] {
+			return fmt.Errorf("init container name %q conflicts with an existing container in the pod", initContainer.GetName())
+		}
+		initContainerNames[initContainer.GetName()] = true
+		if initContainer.GetImage() == "" {
+			return fmt.Errorf("init container %q must specify an image", initContainer.GetName())
+		}
+
+		// Apply the same PSS hardening as the compiler gives user containers.
+		allowPrivilegeEscalation := false
+		k8sInitContainer := k8score.Container{
+			Name:    initContainer.GetName(),
+			Image:   initContainer.GetImage(),
+			Command: initContainer.GetCommand(),
+			Args:    initContainer.GetArgs(),
+			SecurityContext: &k8score.SecurityContext{
+				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+				Capabilities: &k8score.Capabilities{
+					Drop: []k8score.Capability{"ALL"},
+				},
+				SeccompProfile: &k8score.SeccompProfile{
+					Type: k8score.SeccompProfileTypeRuntimeDefault,
+				},
+			},
+		}
+		// Apply administrator identity defaults.
+		if opts.DefaultRunAsUser != nil {
+			v := *opts.DefaultRunAsUser
+			k8sInitContainer.SecurityContext.RunAsUser = &v
+		}
+		if opts.DefaultRunAsGroup != nil {
+			v := *opts.DefaultRunAsGroup
+			k8sInitContainer.SecurityContext.RunAsGroup = &v
+		}
+		if opts.DefaultRunAsNonRoot != nil {
+			v := *opts.DefaultRunAsNonRoot
+			k8sInitContainer.SecurityContext.RunAsNonRoot = &v
+		}
+		// "Always" converts to a native sidecar (the only valid value).
+		if initContainer.GetRestartPolicy() != "" {
+			if initContainer.GetRestartPolicy() != string(k8score.ContainerRestartPolicyAlways) {
+				return fmt.Errorf("init container %q restart policy must be %q, got %q",
+					initContainer.GetName(), k8score.ContainerRestartPolicyAlways, initContainer.GetRestartPolicy())
+			}
+			restartPolicy := k8score.ContainerRestartPolicyAlways
+			k8sInitContainer.RestartPolicy = &restartPolicy
+		}
+		if resources := initContainer.GetResources(); resources != nil {
+			parseResourceList := func(kind string, quantities map[string]string) (k8score.ResourceList, error) {
+				if len(quantities) == 0 {
+					return nil, nil
+				}
+				resourceList := k8score.ResourceList{}
+				for resourceName, quantityValue := range quantities {
+					quantity, err := k8sres.ParseQuantity(quantityValue)
+					if err != nil {
+						return nil, fmt.Errorf("init container %q has an invalid resource %s %s=%q: %w",
+							initContainer.GetName(), kind, resourceName, quantityValue, err)
+					}
+					resourceList[k8score.ResourceName(resourceName)] = quantity
+				}
+				return resourceList, nil
+			}
+			requests, err := parseResourceList("request", resources.GetRequests())
+			if err != nil {
+				return err
+			}
+			limits, err := parseResourceList("limit", resources.GetLimits())
+			if err != nil {
+				return err
+			}
+			k8sInitContainer.Resources = k8score.ResourceRequirements{
+				Requests: requests,
+				Limits:   limits,
+			}
+		}
+		for _, envVar := range initContainer.GetEnv() {
+			if envVar.GetName() == "" {
+				return fmt.Errorf("init container %q has an environment variable with an empty name", initContainer.GetName())
+			}
+			k8sInitContainer.Env = append(k8sInitContainer.Env, k8score.EnvVar{
+				Name:  envVar.GetName(),
+				Value: envVar.GetValue(),
+			})
+		}
+		for _, volumeMount := range initContainer.GetVolumeMounts() {
+			if volumeMount.GetVolumeName() == "" {
+				return fmt.Errorf("init container %q has a volume mount with an empty volume name", initContainer.GetName())
+			}
+			if !strings.HasPrefix(volumeMount.GetMountPath(), "/") {
+				return fmt.Errorf("init container %q volume mount %q must use an absolute mount path", initContainer.GetName(), volumeMount.GetVolumeName())
+			}
+			k8sInitContainer.VolumeMounts = append(k8sInitContainer.VolumeMounts, k8score.VolumeMount{
+				Name:      volumeMount.GetVolumeName(),
+				MountPath: volumeMount.GetMountPath(),
+			})
+		}
+		podSpec.InitContainers = append(podSpec.InitContainers, k8sInitContainer)
+	}
+
+	// Enforce administrator hostUsers default regardless of user override.
+	if opts.DefaultHostUsers != nil {
+		if podSpec.HostUsers != nil && *podSpec.HostUsers != *opts.DefaultHostUsers {
+			glog.Warningf("Ignoring user-specified hostUsers=%t: administrator default hostUsers=%t takes precedence",
+				*podSpec.HostUsers, *opts.DefaultHostUsers)
+		}
+		v := *opts.DefaultHostUsers
+		podSpec.HostUsers = &v
+	}
+
 	return nil
 }
 
@@ -770,16 +983,28 @@ func createPVC(
 	}
 
 	// Optional input: annotations
-	pvcAnnotationsInput := inputs.ParameterValues["annotations"]
 	pvcAnnotations := make(map[string]string)
-	for key, val := range pvcAnnotationsInput.GetStructValue().AsMap() {
-		typedVal := val.(structpb.Value)
-		pvcAnnotations[key] = typedVal.GetStringValue()
+	if pvcAnnotationsInput, ok := inputs.ParameterValues["annotations"]; ok && pvcAnnotationsInput != nil {
+		for key, val := range pvcAnnotationsInput.GetStructValue().GetFields() {
+			pvcAnnotations[key] = val.GetStringValue()
+		}
 	}
 
 	// Optional input: volume_name
-	volumeNameInput := inputs.ParameterValues["volume_name"]
-	volumeName := volumeNameInput.GetStringValue()
+	var volumeName string
+	if volumeNameInput, ok := inputs.ParameterValues["volume_name"]; ok && volumeNameInput != nil {
+		volumeName = volumeNameInput.GetStringValue()
+	}
+
+	// Optional input: data_source
+	var dataSource *k8score.TypedLocalObjectReference
+	if dataSourceInput, ok := inputs.ParameterValues["data_source"]; ok && dataSourceInput != nil {
+		ds, err := buildPVCDataSource(dataSourceInput)
+		if err != nil {
+			return "", createdExecution, pb.Execution_FAILED, fmt.Errorf("failed to build data source: %w", err)
+		}
+		dataSource = ds
+	}
 
 	// Get execution fingerprint and MLMD ID for caching
 	// If pvcName includes a randomly generated UUID, it is added in the execution input as a key-value pair for this purpose only
@@ -844,6 +1069,7 @@ func createPVC(
 			},
 			StorageClassName: &storageClassName,
 			VolumeName:       volumeName,
+			DataSource:       dataSource,
 		},
 	}
 
@@ -863,6 +1089,28 @@ func createPVC(
 	}
 
 	return createdPVC.ObjectMeta.Name, createdExecution, pb.Execution_COMPLETE, nil
+}
+
+// buildPVCDataSource converts a protobuf Value representing a PVC data source
+// into a Kubernetes TypedLocalObjectReference. If the input is nil or if JSON
+// marshaling/unmarshaling fails, it returns an error. Field validation is
+// deferred to the Kubernetes API during PVC creation.
+func buildPVCDataSource(pvcDataSourceInput *structpb.Value) (*k8score.TypedLocalObjectReference, error) {
+	if pvcDataSourceInput == nil {
+		return nil, fmt.Errorf("data_source is nil")
+	}
+
+	var dataSource k8score.TypedLocalObjectReference
+	dataSourceBytes, err := pvcDataSourceInput.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data_source %v: %w", pvcDataSourceInput.String(), err)
+	}
+
+	if err := json.Unmarshal(dataSourceBytes, &dataSource); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal data_source: %v. %w", string(dataSourceBytes), err)
+	}
+
+	return &dataSource, nil
 }
 
 func deletePVC(

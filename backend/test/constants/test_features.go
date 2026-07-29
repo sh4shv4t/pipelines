@@ -28,6 +28,11 @@ const (
 	E2eFailed string = "E2EFailure"
 	// E2eCritical - For pipelines that verify the critical functionality of the system
 	E2eCritical string = "E2ECritical"
+	// E2eCriticalShardA and E2eCriticalShardB split the critical pipeline set for CI.
+	E2eCriticalShardA string = "E2ECriticalShardA"
+	E2eCriticalShardB string = "E2ECriticalShardB"
+	// E2eParallelNested - For parallel or nested pipelines for regression testing
+	E2eParallelNested string = "E2EParallelNested"
 	// E2eProxy - For pipeline that runs with a proxy
 	E2eProxy string = "E2EProxy"
 
@@ -36,13 +41,24 @@ const (
 
 	APIServerTests string = "ApiServerTests"
 
-	Experiment           string = "Experiment"
-	Pipeline             string = "Pipeline"
-	PipelineRun          string = "PipelineRun"
-	PipelineScheduledRun string = "PipelineRecurringRun"
-	PipelineUpload       string = "PipelineUpload"
-	ReportTests          string = "Report"
+	Experiment            string = "Experiment"
+	Pipeline              string = "Pipeline"
+	PipelineCacheDisabled string = "PipelineCacheDisabled"
+	PipelineCacheEnabled  string = "PipelineCacheEnabled"
+	PipelineRun           string = "PipelineRun"
+	PipelineScheduledRun  string = "PipelineRecurringRun"
+	PipelineUpload        string = "PipelineUpload"
+	ReportTests           string = "Report"
 
 	UpgradePreparation  string = "UpgradePreparation"
 	UpgradeVerification string = "UpgradeVerification"
+
+	// MLflow - quality gate tag for MLflow integration testing
+	MLflow string = "MLflow"
+	// MLflowCore — primary MLflow E2E paths
+	MLflowCore string = "MLflowCore"
+	// MLflowParallelLoop — parallel-for pipeline and multi-level nested MLflow run assertions.
+	MLflowParallelLoop string = "MLflowParallelLoop"
+	// MLflowFailure — failed pipelines and RetryRun semantics with MLflow tracking.
+	MLflowFailure string = "MLflowFailure"
 )

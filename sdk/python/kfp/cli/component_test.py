@@ -527,9 +527,9 @@ class Test(unittest.TestCase):
 
                 WORKDIR /usr/local/src/kfp/components
                 COPY runtime-requirements.txt runtime-requirements.txt
-                RUN pip install --index-url https://pypi.org/simple --trusted-host https://pypi.org/simple --no-cache-dir -r runtime-requirements.txt
+                RUN pip install --index-url https://pypi.org/simple --no-cache-dir -r runtime-requirements.txt
 
-                RUN pip install --index-url https://pypi.org/simple --trusted-host https://pypi.org/simple --no-cache-dir kfp==1.2.3
+                RUN pip install --index-url https://pypi.org/simple --no-cache-dir kfp==1.2.3
                 COPY . .
                 '''))
 
@@ -558,9 +558,9 @@ class Test(unittest.TestCase):
 
                 WORKDIR /usr/local/src/kfp/components
                 COPY runtime-requirements.txt runtime-requirements.txt
-                RUN pip install --index-url https://pypi.org/simple --extra-index-url https://example.com/pypi/simple --trusted-host https://pypi.org/simple --trusted-host https://example.com/pypi/simple --no-cache-dir -r runtime-requirements.txt
+                RUN pip install --index-url https://pypi.org/simple --extra-index-url https://example.com/pypi/simple --no-cache-dir -r runtime-requirements.txt
 
-                RUN pip install --index-url https://pypi.org/simple --extra-index-url https://example.com/pypi/simple --trusted-host https://pypi.org/simple --trusted-host https://example.com/pypi/simple --no-cache-dir kfp==1.2.3
+                RUN pip install --index-url https://pypi.org/simple --extra-index-url https://example.com/pypi/simple --no-cache-dir kfp==1.2.3
                 COPY . .
                 '''))
 
@@ -607,9 +607,6 @@ class Test(unittest.TestCase):
                 COPY . .
                 '''))
 
-    @unittest.skip(
-        "Skipping this test as it's failing. Refer to https://github.com/kubeflow/pipelines/issues/11038"
-    )
     def test_dockerfile_can_contain_custom_kfp_package(self):
         component = _make_component(
             func_name='train', target_image='custom-image')

@@ -92,10 +92,8 @@ var _ = Describe("Upload and Verify Pipeline Run >", Label(FullRegression), func
 		for _, secret := range secrets {
 			testutil.CreateSecret(k8Client, testutil.GetNamespace(), secret)
 		}
-	})
 
-	AfterEach(func() {
-		logger.Log("################### Global Cleanup after each test #####################")
+		DeferCleanup(cleanupE2ETestResources, testContext)
 	})
 
 	ReportAfterEach(func(specReport types.SpecReport) {
@@ -105,26 +103,6 @@ var _ = Describe("Upload and Verify Pipeline Run >", Label(FullRegression), func
 		if specReport.Failed() && len(testContext.PipelineRun.CreatedRunIds) > 0 {
 			report, _ := testutil.BuildArchivedWorkflowLogsReport(k8Client, testContext.PipelineRun.CreatedRunIds)
 			AddReportEntry(testutil.ArchivedWorkflowLogsReportTitle, report)
-		}
-
-		logger.Log("Deleting %d run(s)", len(testContext.PipelineRun.CreatedRunIds))
-		for _, runID := range testContext.PipelineRun.CreatedRunIds {
-			runID := runID
-			testutil.TerminatePipelineRun(runClient, runID)
-			testutil.ArchivePipelineRun(runClient, runID)
-			testutil.DeletePipelineRun(runClient, runID)
-		}
-		logger.Log("Deleting %d experiment(s)", len(testContext.Experiment.CreatedExperimentIds))
-		if len(testContext.Experiment.CreatedExperimentIds) > 0 {
-			for _, experimentID := range testContext.Experiment.CreatedExperimentIds {
-				experimentID := experimentID
-				testutil.DeleteExperiment(experimentClient, experimentID)
-			}
-		}
-		logger.Log("Deleting %d pipeline(s)", len(testContext.Pipeline.CreatedPipelines))
-		for _, pipeline := range testContext.Pipeline.CreatedPipelines {
-			pipelineID := pipeline.PipelineID
-			testutil.DeletePipeline(pipelineClient, pipelineID)
 		}
 	})
 
@@ -140,12 +118,22 @@ var _ = Describe("Upload and Verify Pipeline Run >", Label(FullRegression), func
 		}
 	})
 
+	Context("Upload a nested or a parallel pipeline file, run it and verify that pipeline run succeeds >", FlakeAttempts(2), Label(E2eParallelNested), func() {
+		var pipelineDir = "valid/parallel_and_nested"
+		pipelineFiles := testutil.GetListOfFilesInADir(filepath.Join(testutil.GetPipelineFilesDir(), pipelineDir))
+		for _, pipelineFile := range pipelineFiles {
+			It(fmt.Sprintf("Upload %s pipeline", pipelineFile), func() {
+				validatePipelineRunSuccess(pipelineFile, pipelineDir, testContext)
+			})
+		}
+	})
+
 	// Few of the following pipelines randomly fail in Multi User Mode during CI run - which is why a FlakeAttempt is added, but we need to investigate, create ticket and fix it in the future
 	Context("Upload a pipeline file, run it and verify that pipeline run succeeds >", FlakeAttempts(2), Label("Sample", E2eCritical), func() {
 		var pipelineDir = "valid/critical"
 		pipelineFiles := testutil.GetListOfFilesInADir(filepath.Join(testutil.GetPipelineFilesDir(), pipelineDir))
 		for _, pipelineFile := range pipelineFiles {
-			It(fmt.Sprintf("Upload %s pipeline", pipelineFile), FlakeAttempts(2), func() {
+			It(fmt.Sprintf("Upload %s pipeline", pipelineFile), Label(E2eCriticalShardForPipeline(pipelineFile)), FlakeAttempts(2), func() {
 				validatePipelineRunSuccess(pipelineFile, pipelineDir, testContext)
 			})
 		}
@@ -172,7 +160,7 @@ var _ = Describe("Upload and Verify Pipeline Run >", Label(FullRegression), func
 		pipelineFiles := []string{
 			"essential/component_with_pip_index_urls.yaml",
 			"essential/lightweight_python_functions_pipeline.yaml",
-			"essential/pipeline_in_pipeline.yaml",
+			"parallel_and_nested/pipeline_in_pipeline.yaml",
 			"critical/pipeline_with_secret_as_env.yaml",
 			"critical/pipeline_with_input_status_state.yaml",
 			"critical/notebook_component_simple.yaml",
@@ -267,4 +255,34 @@ func validatePipelineRunSuccess(pipelineFile string, pipelineDir string, testCon
 	compiledWorkflow := workflowutils.UnmarshallWorkflowYAML(filepath.Join(testutil.GetCompiledWorkflowsFilesDir(), pipelineFile))
 	e2e_utils.ValidateComponentStatuses(runClient, k8Client, testContext, createdRunID, compiledWorkflow)
 
+}
+
+func cleanupE2ETestResources(testContext *apitests.TestContext) {
+	logger.Log("################### Global Cleanup after each test #####################")
+	cleanupE2ERuns(testContext)
+	cleanupE2EExperiments(testContext)
+	cleanupE2EPipelines(testContext)
+}
+
+func cleanupE2ERuns(testContext *apitests.TestContext) {
+	logger.Log("Deleting %d run(s)", len(testContext.PipelineRun.CreatedRunIds))
+	for _, runID := range testContext.PipelineRun.CreatedRunIds {
+		testutil.TerminatePipelineRun(runClient, runID)
+		testutil.ArchivePipelineRun(runClient, runID)
+		testutil.DeletePipelineRun(runClient, runID)
+	}
+}
+
+func cleanupE2EExperiments(testContext *apitests.TestContext) {
+	logger.Log("Deleting %d experiment(s)", len(testContext.Experiment.CreatedExperimentIds))
+	for _, experimentID := range testContext.Experiment.CreatedExperimentIds {
+		testutil.DeleteExperiment(experimentClient, experimentID)
+	}
+}
+
+func cleanupE2EPipelines(testContext *apitests.TestContext) {
+	logger.Log("Deleting %d pipeline(s)", len(testContext.Pipeline.CreatedPipelines))
+	for _, pipeline := range testContext.Pipeline.CreatedPipelines {
+		testutil.DeletePipelineBestEffort(pipelineClient, pipeline.PipelineID, true)
+	}
 }

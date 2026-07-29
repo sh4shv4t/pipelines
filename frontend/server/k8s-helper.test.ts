@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+import { vi, describe, it, expect, afterEach, beforeEach, Mock, SpyInstance } from 'vitest';
 import {
   TEST_ONLY as K8S_TEST_EXPORT,
   getPodLogs,
@@ -19,7 +20,8 @@ import {
   listPodEvents,
   getArgoWorkflow,
   getK8sSecret,
-} from './k8s-helper';
+  waitForTensorboardInstance,
+} from './k8s-helper.js';
 
 describe('k8s-helper', () => {
   describe('parseTensorboardLogDir', () => {
@@ -174,10 +176,10 @@ describe('k8s-helper', () => {
   });
 
   describe('getPodLogs', () => {
-    let readNamespacedPodLogSpy: jest.SpyInstance;
+    let readNamespacedPodLogSpy: SpyInstance;
 
     beforeEach(() => {
-      readNamespacedPodLogSpy = jest.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedPodLog');
+      readNamespacedPodLogSpy = vi.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedPodLog');
     });
 
     afterEach(() => {
@@ -186,24 +188,32 @@ describe('k8s-helper', () => {
 
     it('returns pod logs when successful', async () => {
       const mockLogs = 'container log output';
-      readNamespacedPodLogSpy.mockResolvedValue({ body: mockLogs });
+      readNamespacedPodLogSpy.mockResolvedValue(mockLogs);
 
       const logs = await getPodLogs('test-pod', 'test-namespace', 'main');
 
-      expect(readNamespacedPodLogSpy).toHaveBeenCalledWith('test-pod', 'test-namespace', 'main');
+      expect(readNamespacedPodLogSpy).toHaveBeenCalledWith({
+        name: 'test-pod',
+        namespace: 'test-namespace',
+        container: 'main',
+      });
       expect(logs).toBe(mockLogs);
     });
 
     it('uses default container name "main" when not specified', async () => {
-      readNamespacedPodLogSpy.mockResolvedValue({ body: 'logs' });
+      readNamespacedPodLogSpy.mockResolvedValue('logs');
 
       await getPodLogs('test-pod', 'test-namespace');
 
-      expect(readNamespacedPodLogSpy).toHaveBeenCalledWith('test-pod', 'test-namespace', 'main');
+      expect(readNamespacedPodLogSpy).toHaveBeenCalledWith({
+        name: 'test-pod',
+        namespace: 'test-namespace',
+        container: 'main',
+      });
     });
 
-    it('returns empty string when response body is undefined', async () => {
-      readNamespacedPodLogSpy.mockResolvedValue({});
+    it('returns empty string when response is empty', async () => {
+      readNamespacedPodLogSpy.mockResolvedValue('');
 
       const logs = await getPodLogs('test-pod', 'test-namespace');
 
@@ -220,11 +230,54 @@ describe('k8s-helper', () => {
     });
   });
 
-  describe('getPod', () => {
-    let readNamespacedPodSpy: jest.SpyInstance;
+  describe('waitForTensorboardInstance', () => {
+    let getNamespacedCustomObjectSpy: SpyInstance;
 
     beforeEach(() => {
-      readNamespacedPodSpy = jest.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedPod');
+      vi.useFakeTimers();
+      getNamespacedCustomObjectSpy = vi.spyOn(
+        K8S_TEST_EXPORT.k8sV1CustomObjectClient,
+        'getNamespacedCustomObject',
+      );
+    });
+
+    afterEach(() => {
+      getNamespacedCustomObjectSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it('rejects and stops polling when tensorboard lookup throws', async () => {
+      const lookupError = new Error('lookup failed');
+
+      getNamespacedCustomObjectSpy.mockResolvedValue({
+        metadata: { name: 'viewer-abcdefg' },
+        spec: {
+          tensorboardSpec: {
+            get tensorflowImage() {
+              throw lookupError;
+            },
+          },
+          type: 'tensorboard',
+        },
+      });
+
+      const waitPromise = waitForTensorboardInstance('log-dir-1', 'test-namespace', 5000);
+      const waitErrorPromise = waitPromise.catch((error) => error);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(waitErrorPromise).resolves.toBe(lookupError);
+      expect(getNamespacedCustomObjectSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(getNamespacedCustomObjectSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getPod', () => {
+    let readNamespacedPodSpy: SpyInstance;
+
+    beforeEach(() => {
+      readNamespacedPodSpy = vi.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedPod');
     });
 
     afterEach(() => {
@@ -237,11 +290,14 @@ describe('k8s-helper', () => {
         spec: { containers: [] },
         status: { phase: 'Running' },
       };
-      readNamespacedPodSpy.mockResolvedValue({ body: mockPod });
+      readNamespacedPodSpy.mockResolvedValue(mockPod);
 
       const [pod, error] = await getPod('test-pod', 'test-namespace');
 
-      expect(readNamespacedPodSpy).toHaveBeenCalledWith('test-pod', 'test-namespace');
+      expect(readNamespacedPodSpy).toHaveBeenCalledWith({
+        name: 'test-pod',
+        namespace: 'test-namespace',
+      });
       expect(pod).toEqual(mockPod);
       expect(error).toBeUndefined();
     });
@@ -277,13 +333,10 @@ describe('k8s-helper', () => {
   });
 
   describe('getConfigMap', () => {
-    let readNamespacedConfigMapSpy: jest.SpyInstance;
+    let readNamespacedConfigMapSpy: SpyInstance;
 
     beforeEach(() => {
-      readNamespacedConfigMapSpy = jest.spyOn(
-        K8S_TEST_EXPORT.k8sV1Client,
-        'readNamespacedConfigMap',
-      );
+      readNamespacedConfigMapSpy = vi.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedConfigMap');
     });
 
     afterEach(() => {
@@ -295,11 +348,14 @@ describe('k8s-helper', () => {
         metadata: { name: 'test-config', namespace: 'test-namespace' },
         data: { key1: 'value1', key2: 'value2' },
       };
-      readNamespacedConfigMapSpy.mockResolvedValue({ body: mockConfigMap });
+      readNamespacedConfigMapSpy.mockResolvedValue(mockConfigMap);
 
       const [configMap, error] = await getConfigMap('test-config', 'test-namespace');
 
-      expect(readNamespacedConfigMapSpy).toHaveBeenCalledWith('test-config', 'test-namespace');
+      expect(readNamespacedConfigMapSpy).toHaveBeenCalledWith({
+        name: 'test-config',
+        namespace: 'test-namespace',
+      });
       expect(configMap).toEqual(mockConfigMap);
       expect(error).toBeUndefined();
     });
@@ -335,10 +391,10 @@ describe('k8s-helper', () => {
   });
 
   describe('listPodEvents', () => {
-    let listNamespacedEventSpy: jest.SpyInstance;
+    let listNamespacedEventSpy: SpyInstance;
 
     beforeEach(() => {
-      listNamespacedEventSpy = jest.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'listNamespacedEvent');
+      listNamespacedEventSpy = vi.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'listNamespacedEvent');
     });
 
     afterEach(() => {
@@ -352,17 +408,15 @@ describe('k8s-helper', () => {
           { message: 'Started container', reason: 'Started' },
         ],
       };
-      listNamespacedEventSpy.mockResolvedValue({ body: mockEvents });
+      listNamespacedEventSpy.mockResolvedValue(mockEvents);
 
       const [events, error] = await listPodEvents('test-pod', 'test-namespace');
 
-      expect(listNamespacedEventSpy).toHaveBeenCalledWith(
-        'test-namespace',
-        undefined,
-        undefined,
-        undefined,
-        'involvedObject.namespace=test-namespace,involvedObject.name=test-pod,involvedObject.kind=Pod',
-      );
+      expect(listNamespacedEventSpy).toHaveBeenCalledWith({
+        namespace: 'test-namespace',
+        fieldSelector:
+          'involvedObject.namespace=test-namespace,involvedObject.name=test-pod,involvedObject.kind=Pod',
+      });
       expect(events).toEqual(mockEvents);
       expect(error).toBeUndefined();
     });
@@ -400,29 +454,86 @@ describe('k8s-helper', () => {
   describe('getArgoWorkflow', () => {
     // Note: getArgoWorkflow requires serverNamespace which is read from
     // /var/run/secrets/kubernetes.io/serviceaccount/namespace at module load time.
-    // In a non-cluster environment, this file doesn't exist so serverNamespace is undefined.
-    // These tests verify the namespace validation behavior and error handling.
+    // In local development, FRONTEND_SERVER_NAMESPACE can provide the same value.
+    // These tests verify the namespace validation and fallback behavior.
 
     it('throws error when serverNamespace is not available', async () => {
-      // This test verifies behavior when running outside a kubernetes cluster
-      await expect(getArgoWorkflow('test-workflow')).rejects.toThrow(
-        'Cannot get namespace from /var/run/secrets/kubernetes.io/serviceaccount/namespace',
-      );
+      const originalNamespace = process.env.FRONTEND_SERVER_NAMESPACE;
+      delete process.env.FRONTEND_SERVER_NAMESPACE;
+      try {
+        // This test verifies behavior when running outside a kubernetes cluster
+        await expect(getArgoWorkflow('test-workflow')).rejects.toThrow(
+          'Cannot get namespace from /var/run/secrets/kubernetes.io/serviceaccount/namespace',
+        );
+      } finally {
+        if (originalNamespace === undefined) {
+          delete process.env.FRONTEND_SERVER_NAMESPACE;
+        } else {
+          process.env.FRONTEND_SERVER_NAMESPACE = originalNamespace;
+        }
+      }
     });
 
-    // Additional tests for getArgoWorkflow would require running inside a k8s cluster
-    // or mocking the module initialization. The following behaviors are tested via
-    // integration tests (integration-tests/tensorboard.test.ts):
-    // - Returns workflow when found with 200 status
-    // - Throws error when status code is 400 or higher
-    // - Throws error when status code is null
+    it('uses FRONTEND_SERVER_NAMESPACE when no namespace is provided', async () => {
+      const originalNamespace = process.env.FRONTEND_SERVER_NAMESPACE;
+      process.env.FRONTEND_SERVER_NAMESPACE = 'local-dev-namespace';
+      const getNamespacedCustomObjectSpy = vi
+        .spyOn(K8S_TEST_EXPORT.k8sV1CustomObjectClient, 'getNamespacedCustomObject')
+        .mockResolvedValue({ body: { metadata: { name: 'test-workflow' } } });
+
+      try {
+        await getArgoWorkflow('test-workflow');
+
+        expect(getNamespacedCustomObjectSpy).toHaveBeenCalledWith({
+          group: 'argoproj.io',
+          version: 'v1alpha1',
+          namespace: 'local-dev-namespace',
+          plural: 'workflows',
+          name: 'test-workflow',
+        });
+      } finally {
+        getNamespacedCustomObjectSpy.mockRestore();
+        if (originalNamespace === undefined) {
+          delete process.env.FRONTEND_SERVER_NAMESPACE;
+        } else {
+          process.env.FRONTEND_SERVER_NAMESPACE = originalNamespace;
+        }
+      }
+    });
+
+    it('uses the provided namespace before FRONTEND_SERVER_NAMESPACE', async () => {
+      const originalNamespace = process.env.FRONTEND_SERVER_NAMESPACE;
+      process.env.FRONTEND_SERVER_NAMESPACE = 'local-dev-namespace';
+      const getNamespacedCustomObjectSpy = vi
+        .spyOn(K8S_TEST_EXPORT.k8sV1CustomObjectClient, 'getNamespacedCustomObject')
+        .mockResolvedValue({ body: { metadata: { name: 'test-workflow' } } });
+
+      try {
+        await getArgoWorkflow('test-workflow', 'provided-namespace');
+
+        expect(getNamespacedCustomObjectSpy).toHaveBeenCalledWith({
+          group: 'argoproj.io',
+          version: 'v1alpha1',
+          namespace: 'provided-namespace',
+          plural: 'workflows',
+          name: 'test-workflow',
+        });
+      } finally {
+        getNamespacedCustomObjectSpy.mockRestore();
+        if (originalNamespace === undefined) {
+          delete process.env.FRONTEND_SERVER_NAMESPACE;
+        } else {
+          process.env.FRONTEND_SERVER_NAMESPACE = originalNamespace;
+        }
+      }
+    });
   });
 
   describe('getK8sSecret', () => {
-    let readNamespacedSecretSpy: jest.SpyInstance;
+    let readNamespacedSecretSpy: SpyInstance;
 
     beforeEach(() => {
-      readNamespacedSecretSpy = jest.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedSecret');
+      readNamespacedSecretSpy = vi.spyOn(K8S_TEST_EXPORT.k8sV1Client, 'readNamespacedSecret');
     });
 
     afterEach(() => {
@@ -433,22 +544,21 @@ describe('k8s-helper', () => {
       const secretValue = 'my-secret-value';
       const base64Value = Buffer.from(secretValue).toString('base64');
       readNamespacedSecretSpy.mockResolvedValue({
-        body: {
-          data: { 'secret-key': base64Value },
-        },
+        data: { 'secret-key': base64Value },
       });
 
       const result = await getK8sSecret('test-secret', 'secret-key', 'test-namespace');
 
-      expect(readNamespacedSecretSpy).toHaveBeenCalledWith('test-secret', 'test-namespace');
+      expect(readNamespacedSecretSpy).toHaveBeenCalledWith({
+        name: 'test-secret',
+        namespace: 'test-namespace',
+      });
       expect(result).toBe(secretValue);
     });
 
     it('returns empty string when secret key does not exist', async () => {
       readNamespacedSecretSpy.mockResolvedValue({
-        body: {
-          data: { 'other-key': 'c29tZXRoaW5n' },
-        },
+        data: { 'other-key': 'c29tZXRoaW5n' },
       });
 
       const result = await getK8sSecret('test-secret', 'nonexistent-key', 'test-namespace');
@@ -457,9 +567,7 @@ describe('k8s-helper', () => {
     });
 
     it('returns empty string when data is undefined', async () => {
-      readNamespacedSecretSpy.mockResolvedValue({
-        body: {},
-      });
+      readNamespacedSecretSpy.mockResolvedValue({});
 
       const result = await getK8sSecret('test-secret', 'secret-key', 'test-namespace');
 

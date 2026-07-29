@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 import base64
+import hashlib
 
 # From awscli installed in alpine/k8s image
 import botocore.session
@@ -23,11 +24,24 @@ import botocore.session
 S3_BUCKET_NAME = 'mlpipeline'
 
 session = botocore.session.get_session()
-# To interact with seaweedfs user management. Region does not matter.
-iam = session.create_client('iam', region_name='foobar')
-# S3 client for lifecycle policy management
+# S3 client for lifecycle policy and bucket policy management
 s3_endpoint_url = os.environ.get("S3_ENDPOINT_URL", "http://seaweedfs.kubeflow:8333")
 s3 = session.create_client('s3', region_name='foobar', endpoint_url=s3_endpoint_url)
+
+
+def _normalize_domain(domain):
+    return domain if domain.startswith('.') else '.' + domain
+
+
+def create_iam_client():
+    # To interact with SeaweedFS user management. Region does not matter.
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
+    if endpoint_url:
+        return session.create_client('iam', region_name='foobar', endpoint_url=endpoint_url)
+    return session.create_client('iam', region_name='foobar')
+
+
+iam = create_iam_client()
 
 
 def main():
@@ -41,7 +55,9 @@ def get_settings_from_env(controller_port=None,
                           frontend_tag=None,
                           disable_istio_sidecar=None,
                           artifacts_proxy_enabled=None,
-                          artifact_retention_days=None):
+                          artifact_retention_days=None,
+                          cluster_domain=None,
+                          object_store_host=None):
     """
     Returns a dict of settings from environment variables relevant to the controller
 
@@ -71,6 +87,14 @@ def get_settings_from_env(controller_port=None,
         artifact_retention_days or \
         os.environ.get("ARTIFACT_RETENTION_DAYS", -1)
 
+    settings["cluster_domain"] = \
+        cluster_domain or \
+        os.environ.get("CLUSTER_DOMAIN", ".svc.cluster.local")
+
+    settings["object_store_host"] = \
+        object_store_host or \
+        os.environ.get("OBJECT_STORE_HOST", "seaweedfs")
+
     # Look for specific tags for each image first, falling back to
     # previously used KFP_VERSION environment variable for backwards
     # compatibility
@@ -91,6 +115,8 @@ def server_factory(frontend_image,
                    disable_istio_sidecar,
                    artifacts_proxy_enabled,
                    artifact_retention_days,
+                   cluster_domain=".svc.cluster.local",
+                   object_store_host="seaweedfs",
                    url="",
                    controller_port=8080):
     """
@@ -147,6 +173,84 @@ def server_factory(frontend_image,
                 else:
                     print(f"ERROR: Failed to configure lifecycle policy: {exception}")
 
+        def ensure_bucket_list_policy(self, bucket_name):
+            """Bucket-wide ListBucket isolation, keyed on ${aws:username}.
+
+            Top-level folder browsing is allowed for everyone; listing deeper
+            inside another namespace's private prefix is denied. HeadBucket
+            (KServe storage-initializer) is allowed. Set as a bucket policy
+            because the embedded user-policy engine is Allow-only and cannot
+            express Deny; SeaweedFS evaluates the bucket policy before it.
+            """
+            bucket_arn = f"arn:aws:s3:::{bucket_name}"
+            desired = {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "AllowOwnDeepList",
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": "s3:ListBucket",
+                        "Resource": bucket_arn,
+                        "Condition": {"StringLike": {"s3:prefix": [
+                            "private-artifacts/${aws:username}/*",
+                            "private/${aws:username}/*",
+                            "artifacts/*",
+                            "shared/*",
+                        ]}},
+                    },
+                    {
+                        "Sid": "AllowHeadBucket",
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": "s3:ListBucket",
+                        "Resource": bucket_arn,
+                        "Condition": {"StringEquals": {"s3:RequestMethod": "HEAD"}},
+                    },
+                    {
+                        "Sid": "AllowTopLevelDelimitedBrowse",
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": "s3:ListBucket",
+                        "Resource": bucket_arn,
+                        "Condition": {
+                            "Null": {"s3:prefix": "true"},
+                            "StringEquals": {"s3:delimiter": "/"},
+                        },
+                    },
+                    {
+                        "Sid": "DenyOtherDeepList",
+                        "Effect": "Deny",
+                        "Principal": "*",
+                        "Action": "s3:ListBucket",
+                        "Resource": bucket_arn,
+                        "Condition": {
+                            "StringLike": {"s3:prefix": ["private-artifacts/*", "private/*"]},
+                            "StringNotLike": {"s3:prefix": [
+                                "private-artifacts/${aws:username}/*",
+                                "private/${aws:username}/*",
+                            ]},
+                        },
+                    },
+                ],
+            }
+            desired_json = json.dumps(desired, sort_keys=True)
+
+            try:
+                current = s3.get_bucket_policy(Bucket=bucket_name).get("Policy", "")
+                if current and json.dumps(json.loads(current), sort_keys=True) == desired_json:
+                    return
+            except Exception:
+                pass
+
+            try:
+                s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(desired))
+                print(f"Set ListBucket isolation bucket policy on {bucket_name}")
+            except Exception as exception:
+                if hasattr(exception, 'response') and 'Error' in exception.response:
+                    print(f"ERROR: Failed to set bucket policy: {exception.response['Error']['Code']} - {exception}")
+                else:
+                    print(f"ERROR: Failed to set bucket policy: {exception}")
 
         def sync(self, parent, attachments):
             # parent is a namespace
@@ -179,6 +283,7 @@ def server_factory(frontend_image,
                     },
                     "data": {
                         "defaultPipelineRoot": f"minio://{S3_BUCKET_NAME}/private-artifacts/{namespace}/v2/artifacts",
+                        "clusterDomain": cluster_domain,
                     },
                 },
                 {
@@ -208,7 +313,7 @@ def server_factory(frontend_image,
                         "default-namespaced": json.dumps({
                             "archiveLogs": True,
                             "s3": {
-                                "endpoint": "minio-service.kubeflow:9000",
+                                "endpoint": f"{object_store_host}.kubeflow{_normalize_domain(cluster_domain)}:9000",
                                 "bucket": S3_BUCKET_NAME,
                                 "keyFormat": f"private-artifacts/{namespace}/{{{{workflow.name}}}}/{{{{workflow.creationTimestamp.Y}}}}/{{{{workflow.creationTimestamp.m}}}}/{{{{workflow.creationTimestamp.d}}}}/{{{{pod.name}}}}",
                                 "insecure": True,
@@ -250,9 +355,10 @@ def server_factory(frontend_image,
                                     "labels": {
                                         "app": "ml-pipeline-ui-artifact"
                                     },
-                                    "annotations": disable_istio_sidecar and {
-                                        "sidecar.istio.io/inject": "false"
-                                    } or {},
+                                    "annotations": {
+                                        **({"sidecar.istio.io/inject": "false"} if disable_istio_sidecar else {}),
+                                        "kubeflow-pipelines/image-spec-hash": hashlib.sha256(f"{frontend_image}:{frontend_tag}".encode()).hexdigest()[:16],
+                                    },
                                 },
                                 "spec": {
                                     "containers": [{
@@ -285,7 +391,7 @@ def server_factory(frontend_image,
                                             },
                                             {
                                                 "name": "ML_PIPELINE_SERVICE_HOST",
-                                                "value": "ml-pipeline.kubeflow.svc.cluster.local"
+                                                "value": f"ml-pipeline.kubeflow{_normalize_domain(cluster_domain)}"
                                             },
                                             {
                                                 "name": "ML_PIPELINE_SERVICE_PORT",
@@ -294,6 +400,10 @@ def server_factory(frontend_image,
                                             {
                                                 "name": "FRONTEND_SERVER_NAMESPACE",
                                                 "value": namespace,
+                                            },
+                                            {
+                                                "name": "CLUSTER_DOMAIN",
+                                                "value": cluster_domain,
                                             }
                                         ],
                                         "resources": {
@@ -351,30 +461,37 @@ def server_factory(frontend_image,
             else:
                 print('Creating new access key.')
                 s3_access_key = iam.create_access_key(UserName=namespace)
-                # Use the AWS IAM API of seaweedfs to manage access policies to bucket.
-                # This policy ensures that a user can only access artifacts from his own profile.
+
+                # Per-user policy grants object access only. ListBucket scoping is
+                # handled by the bucket policy (ensure_bucket_list_policy) because
+                # the embedded user-policy engine is Allow-only and cannot Deny.
                 iam.put_user_policy(
                     UserName=namespace,
                     PolicyName=f"KubeflowProject{namespace}",
                     PolicyDocument=json.dumps(
                         {
                             "Version": "2012-10-17",
-                            "Statement": [{
-                                "Effect": "Allow",
-                                "Action": [
-                                    "s3:Put*",
-                                    "s3:Get*",
-                                    "s3:List*"
-                                ],
-                                "Resource": [
-                                    f"arn:aws:s3:::{S3_BUCKET_NAME}/artifacts/*",
-                                    f"arn:aws:s3:::{S3_BUCKET_NAME}/private-artifacts/{namespace}/*",
-                                    f"arn:aws:s3:::{S3_BUCKET_NAME}/private/{namespace}/*",
-                                    f"arn:aws:s3:::{S3_BUCKET_NAME}/shared/*",
-                                ]
-                            }]
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:Put*",
+                                        "s3:Get*",
+                                        "s3:List*",
+                                        "s3:DeleteObject"
+                                    ],
+                                    "Resource": [
+                                        f"arn:aws:s3:::{S3_BUCKET_NAME}/artifacts/*",
+                                        f"arn:aws:s3:::{S3_BUCKET_NAME}/private-artifacts/{namespace}/*",
+                                        f"arn:aws:s3:::{S3_BUCKET_NAME}/private/{namespace}/*",
+                                        f"arn:aws:s3:::{S3_BUCKET_NAME}/shared/*",
+                                    ]
+                                }
+                            ]
                         })
                 )
+
+                self.ensure_bucket_list_policy(S3_BUCKET_NAME)
 
                 self.upsert_lifecycle_policy(S3_BUCKET_NAME, artifact_retention_days)
 

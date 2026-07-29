@@ -14,8 +14,13 @@ on:
 
   pull_request:
     paths:
+      - '**/pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/upgrade-test.yml'
+      - '.github/workflows/image-builds.yml'
       - '.github/actions/create-cluster/**'
+      - '.github/actions/deploy/**'
+      - '.github/actions/test-and-report/**'
       - '.github/resources/**'
       - 'backend/api/v2beta1/**'
       - 'backend/src/**'
@@ -26,26 +31,31 @@ on:
       - '!**/*.md'
       - '!**/OWNERS'
 
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    uses: ./.github/workflows/image-builds-with-cache.yml
+    uses: ./.github/workflows/image-builds.yml
 
   upgrade-test:
-    needs: build
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     strategy:
       matrix:
-        k8s_version: [ "v1.34.0" ]
+        k8s_version: [ "v1.36.1" ]
     name: KFP upgrade tests - K8s ${{ matrix.k8s_version }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+        uses: ./.github/actions/setup-go
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -56,7 +66,26 @@ jobs:
         shell: bash
         id: get-tag
         run: |
-          lastRelease=$(curl -sSL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/kubeflow/pipelines/releases/latest" | jq -r .tag_name)
+          lastRelease=""
+          for attempt in 1 2 3; do
+            lastRelease=$(curl -sSL --fail-with-body --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              "https://api.github.com/repos/kubeflow/pipelines/releases/latest" | jq -r .tag_name 2>/dev/null || echo "")
+            if [[ -n "$lastRelease" && "$lastRelease" != "null" ]]; then
+              break
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              echo "Attempt $attempt: Failed to fetch release tag. Retrying in 5s..."
+              sleep 5
+            fi
+          done
+
+          if [[ -z "$lastRelease" || "$lastRelease" == "null" ]]; then
+            echo "::error::Could not fetch latest release tag from GitHub API after 3 attempts."
+            exit 1
+          fi
+
           echo "Fetched last release tag: $lastRelease"
           echo "lastRelease=$lastRelease" >> "$GITHUB_OUTPUT"
 
@@ -104,9 +133,9 @@ jobs:
         if: ${{ steps.create-cluster.outcome == 'success' }}
         id: deploy
         with:
-          image_path: ${{ needs.build.outputs.IMAGE_PATH }}
-          image_tag: ${{ needs.build.outputs.IMAGE_TAG }}
-          image_registry: ${{ needs.build.outputs.IMAGE_REGISTRY }}
+          image_path: images_${{ github.run_id }}
+          image_tag: latest
+          image_registry: kind-registry:5000
           forward_port: 'true'
 
       - name: Verify Upgrade

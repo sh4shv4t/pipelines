@@ -26,12 +26,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/kubeflow/pipelines/api/v2alpha1/go/pipelinespec"
+	"github.com/kubeflow/pipelines/backend/src/apiserver/common"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
 	scheduledworkflow "github.com/kubeflow/pipelines/backend/src/crd/pkg/apis/scheduledworkflow/v1beta1"
 	"github.com/kubeflow/pipelines/backend/src/v2/compiler/argocompiler"
 	"google.golang.org/protobuf/encoding/protojson"
 	goyaml "gopkg.in/yaml.v3"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -57,6 +59,11 @@ func NewGenericScheduledWorkflow(modelJob *model.Job) (*scheduledworkflow.Schedu
 		return nil, util.Wrap(err, "converting model trigger to crd trigger failed")
 	}
 
+	pluginsInput, err := modelPluginsInputToCRD(modelJob.PluginsInputString)
+	if err != nil {
+		return nil, util.Wrap(err, "Create job failed")
+	}
+
 	return &scheduledworkflow.ScheduledWorkflow{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "kubeflow.org/v2beta1",
@@ -73,6 +80,7 @@ func NewGenericScheduledWorkflow(modelJob *model.Job) (*scheduledworkflow.Schedu
 			PipelineName:      modelJob.PipelineName,
 			PipelineVersionId: modelJob.PipelineVersionId,
 			ServiceAccount:    modelJob.ServiceAccount,
+			PluginsInput:      pluginsInput,
 		},
 	}, nil
 }
@@ -83,6 +91,17 @@ func (t *V2Spec) PipelineSpec() *pipelinespec.PipelineSpec {
 
 func (t *V2Spec) PlatformSpec() *pipelinespec.PlatformSpec {
 	return t.platformSpec
+}
+
+// ValidateJobInputs validates job runtime parameters without a full Argo workflow compilation.
+func (t *V2Spec) ValidateJobInputs(modelJob *model.Job) error {
+	job := &pipelinespec.PipelineJob{}
+	jobRuntimeConfig, err := modelToPipelineJobRuntimeConfig(&modelJob.RuntimeConfig)
+	if err != nil {
+		return util.Wrap(err, "Failed to convert runtime config")
+	}
+	job.RuntimeConfig = jobRuntimeConfig
+	return t.validatePipelineJobInputs(job)
 }
 
 // Converts modelJob to ScheduledWorkflow.
@@ -126,6 +145,13 @@ func (t *V2Spec) ScheduledWorkflow(modelJob *model.Job) (*scheduledworkflow.Sche
 			CacheDisabled:        t.templateOptions.CacheDisabled,
 			DefaultWorkspace:     t.templateOptions.DefaultWorkspace,
 			MLPipelineTLSEnabled: t.templateOptions.MLPipelineTLSEnabled,
+			DefaultRunAsUser:     t.templateOptions.DefaultRunAsUser,
+			DefaultRunAsGroup:    t.templateOptions.DefaultRunAsGroup,
+			DefaultRunAsNonRoot:  t.templateOptions.DefaultRunAsNonRoot,
+			DefaultHostUsers:     t.templateOptions.DefaultHostUsers,
+			// Read the admin configured driver pod metadata here, at the API server layer,
+			// so the compiler itself stays free of any dependency on API server state.
+			DriverPodConfig: common.GetDriverPodConfig(),
 		}
 		obj, err = argocompiler.Compile(job, kubernetesSpec, opts)
 	}
@@ -143,9 +169,7 @@ func (t *V2Spec) ScheduledWorkflow(modelJob *model.Job) (*scheduledworkflow.Sche
 	if modelJob.Namespace != "" {
 		executionSpec.SetExecutionNamespace(modelJob.Namespace)
 	}
-	if executionSpec.ServiceAccount() == "" {
-		setDefaultServiceAccount(executionSpec, modelJob.ServiceAccount)
-	}
+	setDefaultServiceAccount(executionSpec, modelJob.ServiceAccount)
 	// Disable istio sidecar injection if not specified
 	executionSpec.SetAnnotationsToAllTemplatesIfKeyNotExist(util.AnnotationKeyIstioSidecarInject, util.AnnotationValueIstioSidecarInjectDisabled)
 	parameters, err := StringMapToCRDParameters(string(modelJob.RuntimeConfig.Parameters))
@@ -367,6 +391,13 @@ func (t *V2Spec) RunWorkflow(modelRun *model.Run, options RunWorkflowOptions) (u
 			CacheDisabled:        t.templateOptions.CacheDisabled,
 			DefaultWorkspace:     t.templateOptions.DefaultWorkspace,
 			MLPipelineTLSEnabled: t.templateOptions.MLPipelineTLSEnabled,
+			DefaultRunAsUser:     t.templateOptions.DefaultRunAsUser,
+			DefaultRunAsGroup:    t.templateOptions.DefaultRunAsGroup,
+			DefaultRunAsNonRoot:  t.templateOptions.DefaultRunAsNonRoot,
+			DefaultHostUsers:     t.templateOptions.DefaultHostUsers,
+			// Read the admin configured driver pod metadata here, at the API server layer,
+			// so the compiler itself stays free of any dependency on API server state.
+			DriverPodConfig: common.GetDriverPodConfig(),
 		}
 		obj, err = argocompiler.Compile(job, kubernetesSpec, opts)
 	}
@@ -484,6 +515,11 @@ func (t *V2Spec) validatePipelineJobInputs(job *pipelinespec.PipelineJob) error 
 			default:
 				return util.NewInvalidInputError("input parameter %s requires type unknown", name)
 			}
+
+			// Validate against literal constraints if specified using shared helper
+			if err := util.ValidateLiteralParameter(name, input, param.GetLiterals()); err != nil {
+				return util.NewInvalidInputError("%s", err.Error())
+			}
 		}
 	}
 
@@ -500,4 +536,22 @@ func (t *V2Spec) validatePipelineJobInputs(job *pipelinespec.PipelineJob) error 
 	}
 
 	return nil
+}
+
+// modelPluginsInputToCRD converts the JSON-encoded plugins_input string from
+// the model layer into the map[string]apiextensionsv1.JSON representation
+// used by the ScheduledWorkflow CRD spec.
+func modelPluginsInputToCRD(lt *model.LargeText) (map[string]apiextensionsv1.JSON, error) {
+	if lt == nil || *lt == "" {
+		return nil, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*lt), &raw); err != nil {
+		return nil, fmt.Errorf("invalid plugins_input JSON: %w", err)
+	}
+	result := make(map[string]apiextensionsv1.JSON, len(raw))
+	for k, v := range raw {
+		result[k] = apiextensionsv1.JSON{Raw: v}
+	}
+	return result, nil
 }

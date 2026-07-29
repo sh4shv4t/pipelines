@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import { Handler } from 'express';
-import * as k8sHelper from '../k8s-helper';
 import {
   createPodLogsMinioRequestConfig,
   composePodLogsStreamHandler,
   getPodLogsStreamFromK8s,
   getPodLogsStreamFromWorkflow,
   toGetPodLogsStream,
-} from '../workflow-helper';
-import { ArgoConfigs, MinioConfigs, AWSConfigs } from '../configs';
-import { AuthorizeRequestResources, AuthorizeRequestVerb } from '../src/generated/apis/auth';
-import { AuthorizeFn } from '../helpers/auth';
+} from '../workflow-helper.js';
+import { ArgoConfigs, MinioConfigs, AWSConfigs } from '../configs.js';
+import {
+  AuthorizeRequestResources,
+  AuthorizeRequestVerb,
+} from '../src/generated/apis/auth/index.js';
+import { AuthorizeFn } from '../helpers/auth.js';
 
 /**
  * Returns a handler which attempts to retrieve the logs for the specific pod,
@@ -33,6 +35,7 @@ import { AuthorizeFn } from '../helpers/auth';
  * @param argoOptions fallback options to retrieve log archive
  * @param artifactsOptions configs and credentials for the different artifact backend
  * @param authorizeFn function to authorize namespace access
+ * @param authEnabled whether namespace authorization checks are enabled
  */
 export function getPodLogsHandler(
   argoOptions: ArgoConfigs,
@@ -42,6 +45,7 @@ export function getPodLogsHandler(
   },
   podLogContainerName: string,
   authorizeFn: AuthorizeFn,
+  authEnabled: boolean,
 ): Handler {
   const {
     archiveLogs,
@@ -86,6 +90,12 @@ export function getPodLogsHandler(
     // Note decodeURIComponent(undefined) === 'undefined', so I cannot pass the argument directly.
     const podNamespace = decodeURIComponent((req.query.podnamespace as string) || '') || undefined;
 
+    // In multi-user mode, namespace must be explicit so authz cannot be bypassed.
+    if (authEnabled && !podNamespace) {
+      res.status(422).send('podnamespace argument is required');
+      return;
+    }
+
     // Check access to namespace if podNamespace is provided
     if (podNamespace) {
       try {
@@ -110,7 +120,7 @@ export function getPodLogsHandler(
 
     try {
       const stream = await getPodLogsStream(podName, createdAt, podNamespace);
-      stream.on('error', err => {
+      stream.on('error', (err) => {
         if (
           err?.message &&
           err.message?.indexOf('Unable to find pod log archive information') > -1

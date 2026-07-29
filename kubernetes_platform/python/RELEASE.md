@@ -14,16 +14,19 @@ Some steps require elevated permissions to push branches, publish the package, a
 
     ```
     KFP_KUBERNETES_VERSION=0.0.1 # replace with correct version
-    cd kubernetes_platform/python
-    source create_release_branch.sh
+    kfpr run create-kfp-kubernetes-docs-branch \
+      --release-type patch \
+      --version "$KFP_KUBERNETES_VERSION" \
+      --fork-remote upstream \
+      --done
     ```
 
-1.  Follow the instructions printed out by the script in Step 2, which explain how to push the branch to upstream.
+1.  Follow the output from Step 2, which explains how to push the branch to upstream.
 
     By the end, you
     should have pushed a modified `__init__.py`, `conf.py` (from Step 1), and `.gitignore`, `kubernetes_executor_config_pb2.py` and two modified `.readthedocs.yml` files (from Step 2) to the release branch.
 
-1.  [Requires credentials] From the `kubernetes_platform/python` directory with
+1.  [Requires credentials] Ensure you have run `uv sync --extra ci` (or `pip install build`) first, then from the `kubernetes_platform/python` directory with
     `KFP_KUBERNETES_VERSION` set, run:
 
     ```
@@ -36,4 +39,3 @@ Some steps require elevated permissions to push branches, publish the package, a
     [readthedocs.org/projects/kfp-kubernetes/](https://readthedocs.org/projects/kfp-kubernetes/) (contact @chensun for help),
     click "Versions" in the menu panel, and search for the correct branch to activate the version. Make sure the docs build.
     Visit the settings page and set the "Default branch" and "Default version" to the version you just released.
-

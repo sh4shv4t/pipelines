@@ -6,12 +6,20 @@ on:
 
   pull_request:
     paths:
+      - '**/pyproject.toml'
+      - 'uv.lock'
       - 'api/**'
       - 'sdk/python/**'
       - 'test/presubmit-yapf-sdk.sh'
       - '.github/workflows/sdk-yapf.yml'
+      - '.github/actions/setup-python-pip-cache/**'
       - '!**/*.md'
       - '!**/OWNERS'
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   yapf-sdk:
@@ -19,16 +27,12 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
+    - name: Setup Python with uv
+      uses: ./.github/actions/setup-python
       with:
         python-version: '3.9'
-        cache: 'pip'
-
-    - name: Install dependencies
-      run: pip install yapf
 
     - name: Run YAPF SDK Tests
       run: ./test/presubmit-yapf-sdk.sh

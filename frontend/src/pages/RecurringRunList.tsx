@@ -22,13 +22,42 @@ import { Link, RouteComponentProps } from 'react-router-dom';
 import { RoutePage, RouteParams } from 'src/components/Router';
 import { commonCss, color } from 'src/Css';
 import { formatDateString, errorToMessage } from 'src/lib/Utils';
-import Tooltip from '@material-ui/core/Tooltip';
 import {
   V2beta1RecurringRun,
   V2beta1RecurringRunStatus,
   V2beta1Trigger,
 } from 'src/apisv2beta1/recurringrun';
 import { V2beta1ListExperimentsResponse } from 'src/apisv2beta1/experiment';
+import { Tooltip } from '@mui/material';
+
+/** Extracts start_time and end_time from the trigger's cron or periodic schedule. */
+export function getScheduleTimes(trigger?: V2beta1Trigger): { startTime?: Date; endTime?: Date } {
+  const schedule = trigger?.cron_schedule || trigger?.periodic_schedule;
+  return {
+    startTime: schedule?.start_time,
+    endTime: schedule?.end_time,
+  };
+}
+
+/** Derives schedule status (Active, Scheduled, Expired, Disabled) from run state and trigger times. */
+export function getScheduleStatus(recurringRun: V2beta1RecurringRun): string {
+  if (recurringRun.status === V2beta1RecurringRunStatus.DISABLED) {
+    return 'Disabled';
+  }
+  if (recurringRun.status !== V2beta1RecurringRunStatus.ENABLED) {
+    return '-';
+  }
+
+  const { startTime, endTime } = getScheduleTimes(recurringRun.trigger);
+  const now = new Date();
+  if (startTime && now < startTime) {
+    return 'Scheduled';
+  }
+  if (endTime && now > endTime) {
+    return 'Expired';
+  }
+  return 'Active';
+}
 
 interface DisplayRecurringRun {
   experiment?: ExperimentInfo;
@@ -78,7 +107,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
     this.refresh();
   }
 
-  public render(): JSX.Element {
+  public render(): React.JSX.Element {
     const columns: Column[] = [
       {
         customRenderer: this._nameCustomRenderer,
@@ -88,18 +117,22 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
       },
       { customRenderer: this._statusCustomRenderer, label: 'Status', flex: 0.5 },
       { customRenderer: this._triggerCustomRenderer, label: 'Trigger', flex: 1 },
+      { label: 'Start Time', flex: 1 },
+      { label: 'End Time', flex: 1 },
+      { customRenderer: this._scheduleStatusCustomRenderer, label: 'Schedule Status', flex: 0.7 },
       { label: 'Created at', flex: 1, sortKey: JobSortKeys.CREATED_AT },
     ];
 
     if (!this.props.hideExperimentColumn) {
-      columns.splice(3, 0, {
+      columns.splice(6, 0, {
         customRenderer: this._experimentCustomRenderer,
         flex: 1,
         label: 'Experiment',
       });
     }
 
-    const rows: Row[] = this.state.recurringRuns.map(j => {
+    const rows: Row[] = this.state.recurringRuns.map((j) => {
+      const { startTime, endTime } = getScheduleTimes(j.recurringRun.trigger);
       const row = {
         error: j.error,
         id: j.recurringRun.recurring_run_id!,
@@ -107,11 +140,14 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
           j.recurringRun!.display_name,
           j.recurringRun.status,
           j.recurringRun.trigger,
+          formatDateString(startTime),
+          formatDateString(endTime),
+          getScheduleStatus(j.recurringRun),
           formatDateString(j.recurringRun.created_at),
         ] as any,
       };
       if (!this.props.hideExperimentColumn) {
-        row.otherFields.splice(3, 0, j.experiment);
+        row.otherFields.splice(6, 0, j.experiment);
       }
 
       return row;
@@ -138,8 +174,8 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
               this.props.experimentIdMask
                 ? ' for this experiment'
                 : this.props.namespaceMask
-                ? ' for this namespace'
-                : ''
+                  ? ' for this namespace'
+                  : ''
             }.`
           }
         />
@@ -160,7 +196,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
       <Tooltip title={props.value || ''} enterDelay={300} placement='top-start'>
         <Link
           className={commonCss.link}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           to={RoutePage.RECURRING_RUN_DETAILS.replace(':' + RouteParams.recurringRunId, props.id)}
         >
           {props.value}
@@ -179,7 +215,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
     return (
       <Link
         className={commonCss.link}
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         to={RoutePage.EXPERIMENT_DETAILS.replace(':' + RouteParams.experimentId, props.value.id)}
       >
         {props.value.displayName}
@@ -222,8 +258,34 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
       props.value === V2beta1RecurringRunStatus.ENABLED
         ? color.success
         : props.value === V2beta1RecurringRunStatus.DISABLED
-        ? color.inactive
-        : color.errorText;
+          ? color.inactive
+          : color.errorText;
+    return <div style={{ color: textColor }}>{props.value}</div>;
+  };
+
+  public _scheduleStatusCustomRenderer: React.FC<CustomRendererProps<string>> = (
+    props: CustomRendererProps<string>,
+  ) => {
+    if (!props.value) {
+      return <div>-</div>;
+    }
+    let textColor: string;
+    switch (props.value) {
+      case 'Active':
+        textColor = color.success;
+        break;
+      case 'Scheduled':
+        textColor = color.theme;
+        break;
+      case 'Expired':
+        textColor = color.warningText;
+        break;
+      case 'Disabled':
+        textColor = color.inactive;
+        break;
+      default:
+        textColor = color.inactive;
+    }
     return <div style={{ color: textColor }}>{props.value}</div>;
   };
 
@@ -232,7 +294,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
     let nextPageToken = '';
 
     if (Array.isArray(this.props.recurringRunIdListMask)) {
-      displayRecurringRuns = this.props.recurringRunIdListMask.map(id => ({
+      displayRecurringRuns = this.props.recurringRunIdListMask.map((id) => ({
         recurringRun: { recurring_run_id: id },
       }));
       // listRecurringRuns doesn't currently support batching by IDs, so in this case we
@@ -249,7 +311,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
           this.props.experimentIdMask,
         );
 
-        displayRecurringRuns = (response.recurringRuns || []).map(rr => ({ recurringRun: rr }));
+        displayRecurringRuns = (response.recurringRuns || []).map((rr) => ({ recurringRun: rr }));
         nextPageToken = response.next_page_token || '';
       } catch (err) {
         const error = new Error(await errorToMessage(err));
@@ -291,13 +353,13 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
     }
 
     return Promise.all(
-      displayRecurringRuns.map(displayRecurringRun => {
+      displayRecurringRuns.map((displayRecurringRun) => {
         if (!this.props.hideExperimentColumn) {
           const experimentId = displayRecurringRun.recurringRun.experiment_id;
 
           if (experimentId) {
             const experiment = experimentsResponse?.experiments?.find(
-              e => e.experiment_id === displayRecurringRun.recurringRun.experiment_id,
+              (e) => e.experiment_id === displayRecurringRun.recurringRun.experiment_id,
             );
             // If matching experiment id not found (typically because it has
             // been deleted), set display name to "-".
@@ -325,7 +387,7 @@ class RecurringRunList extends React.PureComponent<RecurringRunListProps, Recurr
     displayRecurringRuns: DisplayRecurringRun[],
   ): Promise<DisplayRecurringRun[]> {
     return Promise.all(
-      displayRecurringRuns.map(async displayRecurringRun => {
+      displayRecurringRuns.map(async (displayRecurringRun) => {
         let getRecurringRunResponse: V2beta1RecurringRun;
         try {
           getRecurringRunResponse = await Apis.recurringRunServiceApi.getRecurringRun(
