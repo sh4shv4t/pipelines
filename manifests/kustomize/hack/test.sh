@@ -32,9 +32,10 @@ kustomization_yamls=(
   "cluster-scoped-resources"
   "base/installs/generic"
   "env/dev"
+  "env/dev/postgresql"
   "env/gcp"
   "env/platform-agnostic"
-  "env/platform-agnostic-emissary"
+  "env/platform-agnostic-postgresql"
 )
 for path in "${kustomization_yamls[@]}"
 do
@@ -45,7 +46,6 @@ done
 kustomization_yamls_v3=(
   "base/installs/multi-user"
   "env/platform-agnostic-multi-user"
-  "env/platform-agnostic-multi-user-emissary"
 )
 for path in "${kustomization_yamls_v3[@]}"
 do

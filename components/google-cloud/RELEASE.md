@@ -1,5 +1,9 @@
 ## Upcoming release
 
+* Remove deprecated Wide and Deep Tabular Workflow pipeline.
+* Remove deprecated TabNet Tabular Workflow pipeline.
+* Dynamically set default boot disk type in CustomJob component for Vertex Pipelines based on machine type.
+
 ## Release 2.22.0
 
 * Fix for dataproc batch components pipeline failure.

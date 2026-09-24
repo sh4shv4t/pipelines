@@ -16,8 +16,12 @@
 import copy
 import json
 import typing
+
+# SDK CI uses isort 5.10.1; pre-commit CI uses isort 9.0.1.
+# isort: off
 from typing import (Any, DefaultDict, Dict, List, Mapping, Optional, Tuple,
                     Union)
+# isort: on
 import warnings
 
 from google.protobuf import json_format
@@ -50,12 +54,13 @@ group_type_to_dsl_class = {
 }
 
 
-def to_protobuf_value(value: type_utils.PARAMETER_TYPES) -> struct_pb2.Value:
+def to_protobuf_value(
+        value: Optional[type_utils.PARAMETER_TYPES]) -> struct_pb2.Value:
     """Creates a google.protobuf.struct_pb2.Value message out of a provide
     value.
 
     Args:
-        value: The value to be converted to Value message.
+        value: The value to be converted to Value message. Must be one of: None, str, int, float, bool, dict, or list.
 
     Returns:
          A google.protobuf.struct_pb2.Value message.
@@ -63,8 +68,10 @@ def to_protobuf_value(value: type_utils.PARAMETER_TYPES) -> struct_pb2.Value:
     Raises:
         ValueError if the given value is not one of the parameter types.
     """
+    if value is None:
+        return struct_pb2.Value(null_value=struct_pb2.NULL_VALUE)
     # bool check must be above (int, float) check because bool is a subclass of int so isinstance(True, int) == True
-    if isinstance(value, bool):
+    elif isinstance(value, bool):
         return struct_pb2.Value(bool_value=value)
     elif isinstance(value, str):
         return struct_pb2.Value(string_value=value)
@@ -81,7 +88,7 @@ def to_protobuf_value(value: type_utils.PARAMETER_TYPES) -> struct_pb2.Value:
                 values=[to_protobuf_value(v) for v in value]))
     else:
         raise ValueError('Value must be one of the following types: '
-                         'str, int, float, bool, dict, and list. Got: '
+                         'None, str, int, float, bool, dict, and list. Got: '
                          f'"{value}" of type "{type(value)}".')
 
 
@@ -721,6 +728,11 @@ def build_container_spec_for_task(
             if TaskConfigField.KUBERNETES_VOLUMES not in allowed_fields:
                 _raise_passthrough_error(
                     task, TaskConfigField.KUBERNETES_VOLUMES.name)
+
+        if _has_any(k8s_cfg, ['podResourceClaims']):
+            if TaskConfigField.KUBERNETES_RESOURCE_CLAIMS not in allowed_fields:
+                _raise_passthrough_error(
+                    task, TaskConfigField.KUBERNETES_RESOURCE_CLAIMS.name)
 
     _validate_task_config_passthroughs_for_kubernetes_settings(task)
 
@@ -1413,6 +1425,9 @@ def build_spec_by_group(
                 single_task_platform_spec = platform_config_to_platform_spec(
                     subgroup.platform_config,
                     executor_label,
+                    parent_component_inputs=group_component_spec
+                    .input_definitions,
+                    tasks_in_current_dag=tasks_in_current_dag,
                 )
                 merge_platform_specs(
                     platform_spec,
@@ -1618,9 +1633,17 @@ def modify_task_for_ignore_upstream_failure(
 def platform_config_to_platform_spec(
     platform_config: dict,
     executor_label: str,
+    parent_component_inputs: Optional[
+        pipeline_spec_pb2.ComponentInputsSpec] = None,
+    tasks_in_current_dag: Optional[List[str]] = None,
 ) -> pipeline_spec_pb2.PlatformSpec:
     """Converts a single task's pipeline_task.platform_config dictionary to a
     PlatformSpec message using the executor_label for the task."""
+    rewritten_config = _rewrite_platform_config_input_references(
+        platform_config=platform_config,
+        parent_component_inputs=parent_component_inputs,
+        tasks_in_current_dag=tasks_in_current_dag,
+    )
     platform_spec_msg = pipeline_spec_pb2.PlatformSpec()
     json_format.ParseDict(
         {
@@ -1631,10 +1654,72 @@ def platform_config_to_platform_spec(
                             executor_label: config
                         }
                     }
-                } for platform_key, config in platform_config.items()
+                } for platform_key, config in rewritten_config.items()
             }
         }, platform_spec_msg)
     return platform_spec_msg
+
+
+def _rewrite_platform_config_input_references(
+    platform_config: dict,
+    parent_component_inputs: Optional[pipeline_spec_pb2.ComponentInputsSpec],
+    tasks_in_current_dag: Optional[List[str]],
+) -> Dict[str, Any]:
+    """Rewrites platform config input references for sub-DAG boundaries.
+
+    When a task is inside a sub-DAG (e.g. ParallelFor), pipeline-level
+    inputs are propagated with a 'pipelinechannel--' prefix.  This
+    function rewrites:
+      - componentInputParameter references to use the prefixed name
+      - taskOutputParameter references from outer tasks to the surfaced
+        componentInputParameter equivalent
+    """
+    if parent_component_inputs is None:
+        return copy.deepcopy(platform_config)
+
+    tasks_in_current_dag = tasks_in_current_dag or []
+
+    def _rewrite(data: Any) -> Any:
+        if isinstance(data, list):
+            return [_rewrite(item) for item in data]
+
+        if not isinstance(data, dict):
+            return data
+
+        rewritten = {key: _rewrite(value) for key, value in data.items()}
+
+        # Rewrite componentInputParameter to prefixed name if needed
+        cip = rewritten.get('componentInputParameter')
+        if cip is not None:
+            if cip not in parent_component_inputs.parameters:
+                prefixed = compiler_utils.additional_input_name_for_pipeline_channel(
+                    cip)
+                if prefixed in parent_component_inputs.parameters:
+                    rewritten['componentInputParameter'] = prefixed
+
+        # Rewrite taskOutputParameter from outer tasks to surfaced
+        # componentInputParameter
+        top = rewritten.get('taskOutputParameter')
+        if top is not None:
+            producer_task = top.get('producerTask')
+            output_key = top.get('outputParameterKey')
+            if (producer_task is not None and output_key is not None and
+                    producer_task not in tasks_in_current_dag):
+                surfaced_name = compiler_utils.additional_input_name_for_pipeline_channel(
+                    f'{producer_task}-{output_key}')
+                if surfaced_name in parent_component_inputs.parameters:
+                    rewritten.pop('taskOutputParameter')
+                    rewritten['componentInputParameter'] = surfaced_name
+                else:
+                    raise compiler_utils.InvalidTopologyException(
+                        'Failed to rewrite cross-DAG platform config reference '
+                        f'for task output {producer_task}.{output_key}. '
+                        f'Expected surfaced input {surfaced_name!r} in parent '
+                        'component inputs, but it was not found.')
+
+        return rewritten
+
+    return _rewrite(platform_config)
 
 
 def merge_platform_specs(
@@ -1706,6 +1791,10 @@ def build_exit_handler_groups_recursively(
                 single_task_platform_spec = platform_config_to_platform_spec(
                     exit_task.platform_config,
                     executor_label,
+                    parent_component_inputs=pipeline_spec.root
+                    .input_definitions,
+                    tasks_in_current_dag=list(
+                        pipeline_spec.root.dag.tasks.keys()),
                 )
                 merge_platform_specs(
                     platform_spec,
@@ -2309,6 +2398,26 @@ def _merge_pipeline_config(pipelineConfig: pipeline_config.PipelineConfig,
     workspace = pipelineConfig.workspace
     if workspace is not None:
         config_dict['workspace'] = workspace.get_workspace()
+
+    if (pipelineConfig.ttl_seconds_after_finished is not None and
+            pipelineConfig.ttl_seconds_after_finished > 0):
+        config_dict[
+            'resourceTtlOnCompletion'] = pipelineConfig.ttl_seconds_after_finished
+
+    if (pipelineConfig.ttl_seconds_after_success is not None and
+            pipelineConfig.ttl_seconds_after_success > 0):
+        config_dict[
+            'resourceTtlOnSuccess'] = pipelineConfig.ttl_seconds_after_success
+
+    if (pipelineConfig.ttl_seconds_after_failure is not None and
+            pipelineConfig.ttl_seconds_after_failure > 0):
+        config_dict[
+            'resourceTtlOnFailure'] = pipelineConfig.ttl_seconds_after_failure
+
+    if (pipelineConfig.active_deadline_seconds is not None and
+            pipelineConfig.active_deadline_seconds > 0):
+        config_dict[
+            'activeDeadlineSeconds'] = pipelineConfig.active_deadline_seconds
 
     if config_dict:
         json_format.ParseDict({'pipelineConfig': config_dict},

@@ -14,56 +14,45 @@
  * limitations under the License.
  */
 import MinioArtifactPreview from './MinioArtifactPreview';
-import React from 'react';
-import TestUtils from '../TestUtils';
+import TestUtils, { expectErrors } from '../TestUtils';
 import { act, render } from '@testing-library/react';
 import { Apis } from '../lib/Apis';
 
 describe('MinioArtifactPreview', () => {
-  const readFile = jest.spyOn(Apis, 'readFile');
+  const readFile = vi.spyOn(Apis, 'readFile');
 
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
     readFile.mockResolvedValue('preview ...');
   });
 
-  it('handles undefined artifact', () => {
-    const { container } = render(<MinioArtifactPreview value={undefined} />);
-    expect(container).toMatchInlineSnapshot(`<div />`);
-  });
-
-  it('handles null artifact', () => {
-    const { container } = render(<MinioArtifactPreview value={null as any} />);
-    expect(container).toMatchInlineSnapshot(`<div />`);
-  });
-
-  it('handles empty artifact', () => {
-    const { container } = render(<MinioArtifactPreview value={{} as any} />);
-    expect(container).toMatchInlineSnapshot(`<div />`);
-  });
-
-  it('handles invalid artifact: no bucket', () => {
-    const s3Artifact = {
-      accessKeySecret: { key: 'accesskey', optional: false, name: 'minio' },
-      bucket: '',
-      endpoint: 'minio.kubeflow',
-      key: 'bar',
-      secretKeySecret: { key: 'secretkey', optional: false, name: 'minio' },
-    };
-    const { container } = render(<MinioArtifactPreview value={s3Artifact} />);
-    expect(container).toMatchInlineSnapshot(`<div />`);
-  });
-
-  it('handles invalid artifact: no key', () => {
-    const s3Artifact = {
-      accessKeySecret: { key: 'accesskey', optional: false, name: 'minio' },
-      bucket: 'foo',
-      endpoint: 'minio.kubeflow',
-      key: '',
-      secretKeySecret: { key: 'secretkey', optional: false, name: 'minio' },
-    };
-    const { container } = render(<MinioArtifactPreview value={s3Artifact} />);
-    expect(container).toMatchInlineSnapshot(`<div />`);
+  it.each([
+    ['undefined', undefined],
+    ['null', null as any],
+    ['empty object', {} as any],
+    [
+      'no bucket',
+      {
+        accessKeySecret: { key: 'accesskey', optional: false, name: 'minio' },
+        bucket: '',
+        endpoint: 'minio.kubeflow',
+        key: 'bar',
+        secretKeySecret: { key: 'secretkey', optional: false, name: 'minio' },
+      },
+    ],
+    [
+      'no key',
+      {
+        accessKeySecret: { key: 'accesskey', optional: false, name: 'minio' },
+        bucket: 'foo',
+        endpoint: 'minio.kubeflow',
+        key: '',
+        secretKeySecret: { key: 'secretkey', optional: false, name: 'minio' },
+      },
+    ],
+  ])('renders nothing for invalid artifact: %s', (_label, value) => {
+    const { container } = render(<MinioArtifactPreview value={value} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('handles string value', () => {
@@ -100,34 +89,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/s3/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=s3&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="s3://foo/bar"
             >
               s3://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=s3&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -157,34 +136,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -214,34 +183,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar?namespace=namespace"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&namespace=namespace&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&namespace=namespace&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -255,6 +214,7 @@ describe('MinioArtifactPreview', () => {
   });
 
   it('handles artifact cleanly even when fetch fails', async () => {
+    const assertErrors = expectErrors();
     const minioArtifact = {
       key: 'bar',
       s3Bucket: {
@@ -270,35 +230,26 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
         </div>
       </div>
     `);
+    assertErrors();
   });
 
   it('handles artifact that previews fully', async () => {
@@ -320,34 +271,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -382,34 +323,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -422,7 +353,7 @@ describe('MinioArtifactPreview', () => {
         </div>
       </div>
     `);
-    expect(queryByText('View All')).toBeTruthy();
+    expect(queryByText('minio://foo/bar')).toBeTruthy();
   });
 
   it('handles artifact that previews with maxbytes', async () => {
@@ -444,34 +375,24 @@ describe('MinioArtifactPreview', () => {
     expect(container).toMatchInlineSnapshot(`
       <div>
         <div
-          class="root"
+          class="root_f96or0t"
         >
           <div
-            class="topDiv"
+            class="topDiv_f1ubk0hm"
           >
             <a
-              class="link"
-              href="artifacts/minio/foo/bar"
+              class="link_f1fk43bf"
+              download=""
+              href="artifacts/get?source=minio&bucket=foo&key=bar&keyEncoding=storage&download=true"
               rel="noopener"
               target="_blank"
               title="minio://foo/bar"
             >
               minio://foo/bar
             </a>
-            <span
-              class="separater"
-            />
-            <a
-              class="link viewLink"
-              href="artifacts/get?source=minio&bucket=foo&key=bar"
-              rel="noopener"
-              target="_blank"
-            >
-              View All
-            </a>
           </div>
           <div
-            class="preview"
+            class="preview_fq9axiv"
           >
             <small>
               <pre>
@@ -485,6 +406,6 @@ describe('MinioArtifactPreview', () => {
         </div>
       </div>
     `);
-    expect(queryByText('View All')).toBeTruthy();
+    expect(queryByText('minio://foo/bar')).toBeTruthy();
   });
 });

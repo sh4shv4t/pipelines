@@ -14,81 +14,31 @@
  * limitations under the License.
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
-import { MemoryRouter } from 'react-router-dom';
-import { Api } from 'src/mlmd/library';
-import {
-  Artifact,
-  ArtifactType,
-  GetArtifactsRequest,
-  GetArtifactsResponse,
-  GetArtifactTypesResponse,
-  Value,
-} from 'src/third_party/mlmd';
-import { ListOperationOptions } from 'src/third_party/mlmd/generated/ml_metadata/proto/metadata_store_pb';
+import { MemoryRouter } from 'react-router';
+import { ArtifactArtifactType, V2beta1Artifact } from 'src/apisv2beta1/artifact';
 import { RoutePage } from 'src/components/Router';
-import TestUtils from 'src/TestUtils';
+import { Apis } from 'src/lib/Apis';
 import { ArtifactList } from 'src/pages/ArtifactList';
 import { PageProps } from 'src/pages/Page';
-import { testBestPractices } from 'src/TestUtils';
+import TestUtils, { testBestPractices } from 'src/TestUtils';
 
 testBestPractices();
 
 describe('ArtifactList', () => {
-  let updateBannerSpy: jest.Mock<{}>;
-  let updateDialogSpy: jest.Mock<{}>;
-  let updateSnackbarSpy: jest.Mock<{}>;
-  let updateToolbarSpy: jest.Mock<{}>;
-  let historyPushSpy: jest.Mock<{}>;
-  let getArtifactsSpy: jest.Mock<{}>;
-  let getArtifactTypesSpy: jest.Mock<{}>;
+  const updateBannerSpy = vi.fn();
+  const navigateSpy = vi.fn();
 
-  const listOperationOpts = new ListOperationOptions();
-  listOperationOpts.setMaxResultSize(10);
-  const getArtifactsRequest = new GetArtifactsRequest();
-  getArtifactsRequest.setOptions(listOperationOpts),
-    beforeEach(() => {
-      updateBannerSpy = jest.fn();
-      updateDialogSpy = jest.fn();
-      updateSnackbarSpy = jest.fn();
-      updateToolbarSpy = jest.fn();
-      historyPushSpy = jest.fn();
-      getArtifactsSpy = jest.spyOn(Api.getInstance().metadataStoreService, 'getArtifacts');
-      getArtifactTypesSpy = jest.spyOn(Api.getInstance().metadataStoreService, 'getArtifactTypes');
-
-      getArtifactTypesSpy.mockImplementation(() => {
-        const artifactType = new ArtifactType();
-        artifactType.setId(6);
-        artifactType.setName('String');
-        const response = new GetArtifactTypesResponse();
-        response.setArtifactTypesList([artifactType]);
-        return Promise.resolve(response);
-      });
-      getArtifactsSpy.mockImplementation(() => {
-        const artifacts = generateNArtifacts(5);
-        const response = new GetArtifactsResponse();
-        response.setArtifactsList(artifacts);
-        return Promise.resolve(response);
-      });
-    });
-
-  function generateNArtifacts(n: number) {
-    let artifacts: Artifact[] = [];
-    for (let i = 1; i <= n; i++) {
-      const artifact = new Artifact();
-      const pipelineValue = new Value();
-      const pipelineName = `pipeline ${i}`;
-      pipelineValue.setStringValue(pipelineName);
-      artifact.getPropertiesMap().set('pipeline_name', pipelineValue);
-      const artifactValue = new Value();
-      const artifactName = `test artifact ${i}`;
-      artifactValue.setStringValue(artifactName);
-      artifact.getPropertiesMap().set('name', artifactValue);
-      artifact.setName(artifactName);
-      artifacts.push(artifact);
-    }
-    return artifacts;
+  function generateArtifacts(count: number): V2beta1Artifact[] {
+    return Array.from({ length: count }, (_, index) => ({
+      artifact_id: `artifact-${index + 1}`,
+      name: `test artifact ${index + 1}`,
+      type: ArtifactArtifactType.Dataset,
+      uri: `s3://pipeline-root/artifact-${index + 1}`,
+      namespace: 'kubeflow',
+      created_at: new Date(`2026-08-${String(index + 1).padStart(2, '0')}T12:00:00Z`),
+    }));
   }
 
   function generateProps(): PageProps {
@@ -96,102 +46,298 @@ describe('ArtifactList', () => {
       ArtifactList,
       { pathname: RoutePage.ARTIFACTS } as any,
       '' as any,
-      historyPushSpy,
+      navigateSpy,
       updateBannerSpy,
-      updateDialogSpy,
-      updateToolbarSpy,
-      updateSnackbarSpy,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
     );
   }
 
-  it('renders one artifact', async () => {
-    getArtifactsSpy.mockImplementation(() => {
-      const artifacts = generateNArtifacts(1);
-      const response = new GetArtifactsResponse();
-      response.setArtifactsList(artifacts);
-      return Promise.resolve(response);
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((resolvePromise) => {
+      resolve = resolvePromise;
     });
-    render(
-      <MemoryRouter>
-        <ArtifactList {...generateProps()} isGroupView={false} />
-      </MemoryRouter>,
-    );
+    return { promise, resolve };
+  }
 
-    await waitFor(() => {
-      expect(getArtifactTypesSpy).toHaveBeenCalledTimes(1);
-      expect(getArtifactsSpy).toHaveBeenCalledTimes(1);
-    });
-
-    screen.getByText('pipeline 1');
-    screen.getByText('test artifact 1');
-  });
-
-  it('displays footer with "10" as default value', async () => {
-    render(
-      <MemoryRouter>
-        <ArtifactList {...generateProps()} isGroupView={false} />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(getArtifactTypesSpy).toHaveBeenCalledTimes(1);
-      expect(getArtifactsSpy).toHaveBeenCalledTimes(1);
-    });
-
-    screen.getByText('Rows per page:');
-    screen.getByText('10');
-  });
-
-  it('shows 20th artifact if page size is 20', async () => {
-    render(
-      <MemoryRouter>
-        <ArtifactList {...generateProps()} isGroupView={false} />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(getArtifactTypesSpy).toHaveBeenCalledTimes(1);
-      expect(getArtifactsSpy).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.queryByText('test artifact 20')).toBeNull(); // Can not see the 20th artifact initially
-
-    getArtifactsSpy.mockImplementation(() => {
-      const artifacts = generateNArtifacts(20);
-      const response = new GetArtifactsResponse();
-      response.setArtifactsList(artifacts);
-      return Promise.resolve(response);
-    });
-
-    const originalRowsPerPage = screen.getByText('10');
-    fireEvent.click(originalRowsPerPage);
-    const newRowsPerPage = screen.getByText('20'); // Change to render 20 rows per page.
-    fireEvent.click(newRowsPerPage);
-
-    listOperationOpts.setMaxResultSize(20);
-    getArtifactsRequest.setOptions(listOperationOpts),
-      await waitFor(() => {
-        // API will be called again if "Rows per page" is changed
-        expect(getArtifactTypesSpy).toHaveBeenCalledTimes(1);
-        expect(getArtifactsSpy).toHaveBeenLastCalledWith(getArtifactsRequest);
+  beforeEach(() => {
+    vi.spyOn(Apis.artifactServiceApiV2, 'artifacts');
+    vi.mocked(Apis.artifactServiceApiV2.artifacts)
+      .mockReset()
+      .mockResolvedValue({
+        artifacts: generateArtifacts(5),
       });
-
-    screen.getByText('test artifact 20'); // The 20th artifacts appears.
   });
 
-  it('finds no artifact', async () => {
-    getArtifactsSpy.mockClear();
-    getArtifactsSpy.mockImplementation(() => {
-      const response = new GetArtifactsResponse();
-      response.setArtifactsList([]);
-      return Promise.resolve(response);
+  it('renders native artifacts and links to their details', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: generateArtifacts(1),
     });
     render(
       <MemoryRouter>
-        <ArtifactList {...generateProps()} isGroupView={false} />
+        <ArtifactList {...generateProps()} />
       </MemoryRouter>,
     );
-    await TestUtils.flushPromises();
 
-    screen.getByText('No artifacts found.');
+    const artifactLink = await screen.findByRole('link', { name: 'test artifact 1' });
+    expect(artifactLink).toHaveAttribute('href', '/artifacts/artifact-1');
+    screen.getByText('system.Dataset');
+    screen.getByText('kubeflow');
+  });
+
+  it('includes the artifact namespace and separates the stored query from the URI path', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: [
+        {
+          ...generateArtifacts(1)[0],
+          namespace: 'team-a',
+          uri: 's3://reports/output.csv?endpoint=https%3A%2F%2Fceph.example%3A9443',
+        },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    const uriLink = await screen.findByRole('link', {
+      name: 's3://reports/output.csv?endpoint=https%3A%2F%2Fceph.example%3A9443',
+    });
+    const [path, query] = (uriLink.getAttribute('href') || '').split('?');
+    expect(path).toBe('artifacts/get');
+    const params = new URLSearchParams(query);
+    expect(params.get('source')).toBe('s3');
+    expect(params.get('bucket')).toBe('reports');
+    expect(params.get('key')).toBe('output.csv');
+    expect(params.get('download')).toBe('true');
+    expect(params.get('namespace')).toBe('team-a');
+    expect(params.get('artifactUriQuery')).toBe('endpoint=https%3A%2F%2Fceph.example%3A9443');
+    expect(params.has('providerInfo')).toBe(false);
+  });
+
+  it('compacts long IDs while preserving an accessible full identity and details link', async () => {
+    const id = '12345678-1234-1234-1234-123456789abc';
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: [{ ...generateArtifacts(1)[0], artifact_id: id }],
+    });
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    const idLink = await screen.findByRole('link', { name: `Artifact ID ${id}` });
+    expect(idLink).toHaveTextContent('12345678…9abc');
+    expect(idLink).toHaveAttribute('href', `/artifacts/${id}`);
+    // Reserve enough of the row for the abbreviated ID instead of clipping its suffix again.
+    expect(idLink.parentElement).toHaveStyle({ width: '15%' });
+    expect(screen.getByText('kubeflow').parentElement).toHaveStyle({ width: '12%' });
+    expect(screen.getByText('system.Dataset')).toHaveStyle({ whiteSpace: 'nowrap' });
+    expect(screen.getByText('kubeflow')).toHaveStyle({ whiteSpace: 'normal' });
+  });
+
+  it('ellipsizes long types with a full tooltip and keeps date and time on deliberate lines', async () => {
+    const createdAt = new Date('2026-08-01T12:34:56Z');
+    const longName = 'a-very-long-artifact-name-that-remains-readable-without-clipping';
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: [
+        {
+          ...generateArtifacts(1)[0],
+          type: ArtifactArtifactType.ClassificationMetric,
+          name: longName,
+          namespace: 'a-long-namespace-that-can-wrap',
+          created_at: createdAt,
+        },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    const type = await screen.findByText('system.ClassificationMetrics');
+    expect(type).toHaveStyle({
+      display: 'block',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+    fireEvent.mouseOver(type);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('system.ClassificationMetrics');
+
+    const date = screen.getByText(createdAt.toLocaleDateString());
+    const time = screen.getByText(createdAt.toLocaleTimeString());
+    expect(date).toHaveStyle({ display: 'block', whiteSpace: 'nowrap' });
+    expect(time).toHaveStyle({ display: 'block', whiteSpace: 'nowrap' });
+    expect(time.parentElement).toHaveAttribute('datetime', createdAt.toISOString());
+    expect(time.parentElement).toHaveAttribute('title', createdAt.toLocaleString());
+    expect(screen.getByRole('link', { name: longName })).toHaveStyle({
+      whiteSpace: 'normal',
+      overflowWrap: 'anywhere',
+    });
+    expect(screen.getByText('a-long-namespace-that-can-wrap')).toHaveStyle({
+      whiteSpace: 'normal',
+      overflowWrap: 'anywhere',
+    });
+  });
+
+  it('uses the native API page token and page size', async () => {
+    const artifactsSpy = vi.mocked(Apis.artifactServiceApiV2.artifacts);
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Rows per page:');
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: '20' }));
+
+    await waitFor(() =>
+      expect(artifactsSpy).toHaveBeenLastCalledWith(undefined, '', 20, 'created_at desc', ''),
+    );
+  });
+
+  it('scopes native artifacts to the selected namespace', async () => {
+    const artifactsSpy = vi.mocked(Apis.artifactServiceApiV2.artifacts);
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} namespace='team-a' />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(artifactsSpy).toHaveBeenCalled());
+    expect(artifactsSpy.mock.calls.at(-1)?.[0]).toBe('team-a');
+  });
+
+  it('renders the empty state', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({ artifacts: [] });
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('No artifacts found.');
+  });
+
+  it('shows a page error when the native API fails', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockRejectedValue(
+      new Error('Artifact service unavailable'),
+    );
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(updateBannerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ additionalInfo: 'Artifact service unavailable', mode: 'error' }),
+      ),
+    );
+  });
+
+  it('skips an artifact without an ID while preserving valid rows', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: [
+        { ...generateArtifacts(1)[0], artifact_id: undefined, name: 'malformed artifact' },
+        { ...generateArtifacts(1)[0], name: 'valid artifact' },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(updateBannerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          additionalInfo: expect.stringContaining(
+            '1 artifact could not be displayed because the Artifact service returned no ID.',
+          ),
+          mode: 'error',
+        }),
+      ),
+    );
+    expect(screen.queryByRole('link', { name: 'malformed artifact' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'valid artifact' })).toBeVisible();
+  });
+
+  it('keeps matching rows visible when a refresh fails', async () => {
+    const listRef = React.createRef<ArtifactList>();
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockResolvedValue({
+      artifacts: [{ ...generateArtifacts(1)[0], name: 'last known artifact' }],
+    });
+    render(
+      <MemoryRouter>
+        <ArtifactList ref={listRef} {...generateProps()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText('last known artifact');
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockRejectedValue(
+      new Error('Artifact service unavailable'),
+    );
+
+    await act(async () => listRef.current?.refresh());
+
+    screen.getByText('last known artifact');
+    expect(updateBannerSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ additionalInfo: 'Artifact service unavailable', mode: 'error' }),
+    );
+  });
+
+  it('stops pagination when the service repeats the current page token', async () => {
+    vi.mocked(Apis.artifactServiceApiV2.artifacts).mockImplementation(
+      async (_namespace, pageToken) => ({
+        artifacts: [{ ...generateArtifacts(1)[0], name: pageToken || 'first page' }],
+        next_page_token: pageToken || 'repeated-page',
+      }),
+    );
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText('first page');
+
+    fireEvent.click(screen.getByTestId('next-page-btn'));
+
+    await waitFor(() =>
+      expect(updateBannerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            'Artifact service returned a repeated page token: repeated-page',
+          ),
+        }),
+      ),
+    );
+    expect(screen.getByTestId('next-page-btn')).toBeDisabled();
+  });
+
+  it('ignores an older response when reload requests overlap', async () => {
+    const first = deferred<{ artifacts: V2beta1Artifact[] }>();
+    const second = deferred<{ artifacts: V2beta1Artifact[] }>();
+    vi.mocked(Apis.artifactServiceApiV2.artifacts)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    render(
+      <MemoryRouter>
+        <ArtifactList {...generateProps()} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(Apis.artifactServiceApiV2.artifacts).toHaveBeenCalledTimes(2));
+
+    second.resolve({ artifacts: [{ ...generateArtifacts(1)[0], name: 'new response' }] });
+    await screen.findByText('new response');
+    first.resolve({ artifacts: [{ ...generateArtifacts(1)[0], name: 'stale response' }] });
+    await waitFor(() => expect(screen.queryByText('stale response')).toBeNull());
+    screen.getByText('new response');
   });
 });

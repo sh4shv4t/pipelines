@@ -14,17 +14,13 @@
  * limitations under the License.
  */
 
-import Button from '@material-ui/core/Button';
-import FormControl from '@material-ui/core/FormControl';
-import InputLabel from '@material-ui/core/InputLabel';
-import MenuItem from '@material-ui/core/MenuItem';
-import Paper from '@material-ui/core/Paper';
-import Select from '@material-ui/core/Select';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { V2beta1Pipeline, V2beta1PipelineVersion } from 'src/apisv2beta1/pipeline';
 import { Description } from 'src/components/Description';
 import { commonCss } from 'src/Css';
-import { formatDateString } from 'src/lib/Utils';
+import { formatDateString, sanitizeExternalHref } from 'src/lib/Utils';
+
+import { Button, FormControl, InputLabel, MenuItem, Paper, Select } from '@mui/material';
 
 interface PipelineVersionCardProps {
   pipeline: V2beta1Pipeline | null;
@@ -42,7 +38,7 @@ export function PipelineVersionCard({
   const [summaryShown, setSummaryShown] = useState(false);
 
   const createVersionUrl = () => {
-    return selectedVersion?.code_source_url;
+    return sanitizeExternalHref(selectedVersion?.code_source_url);
   };
 
   return (
@@ -61,13 +57,14 @@ export function PipelineVersionCard({
             <>
               <div className='text-gray-900 mt-5'>
                 <form autoComplete='off'>
-                  <FormControl>
+                  <FormControl variant='standard'>
                     <InputLabel>Version</InputLabel>
                     <Select
+                      variant='standard'
                       aria-label='version_selector'
                       data-testid='version_selector'
                       value={selectedVersion!.pipeline_version_id}
-                      onChange={event => handleVersionSelected(event.target.value)}
+                      onChange={(event) => handleVersionSelected(event.target.value as string)}
                       inputProps={{ id: 'version-selector', name: 'selectedVersion' }}
                     >
                       {versions.map((v, _) => (
@@ -79,11 +76,13 @@ export function PipelineVersionCard({
                   </FormControl>
                 </form>
               </div>
-              <div className='text-blue-500 mt-5'>
-                <a href={createVersionUrl()} target='_blank' rel='noopener noreferrer'>
-                  Version source
-                </a>
-              </div>
+              {createVersionUrl() && (
+                <div className='text-blue-500 mt-5'>
+                  <a href={createVersionUrl()} target='_blank' rel='noopener noreferrer'>
+                    Version source
+                  </a>
+                </div>
+              )}
             </>
           )}
           <div className='text-gray-900 mt-5'>Uploaded on</div>

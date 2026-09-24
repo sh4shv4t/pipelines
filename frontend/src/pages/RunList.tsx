@@ -14,21 +14,23 @@
  * limitations under the License.
  */
 
+import { NavigationProps } from 'src/lib/Navigation';
 import * as React from 'react';
 import CustomTable, { Column, Row, CustomRendererProps } from 'src/components/CustomTable';
 import Metric from 'src/components/Metric';
 import { MetricMetadata, ExperimentInfo } from 'src/lib/RunUtils';
 import { V2beta1Run, V2beta1RuntimeState, V2beta1RunStorageState } from 'src/apisv2beta1/run';
 import { V2beta1ListExperimentsResponse } from 'src/apisv2beta1/experiment';
+import { V2beta1PipelineVersion } from 'src/apisv2beta1/pipeline';
 import { Apis, RunSortKeys, ListRequest } from 'src/lib/Apis';
-import { Link, RouteComponentProps } from 'react-router-dom';
+import { Link } from 'react-router';
 import { V2beta1Filter, V2beta1PredicateOperation } from 'src/apisv2beta1/filter';
 import { RoutePage, RouteParams, QUERY_PARAMS } from 'src/components/Router';
 import { URLParser } from 'src/lib/URLParser';
 import { commonCss, color } from 'src/Css';
 import { formatDateString, logger, errorToMessage, getRunDurationV2 } from 'src/lib/Utils';
 import { statusToIcon } from './StatusV2';
-import Tooltip from '@material-ui/core/Tooltip';
+import { Tooltip } from '@mui/material';
 
 interface PipelineVersionInfo {
   displayName?: string;
@@ -65,7 +67,7 @@ type MaskProps = Exclude<
 >;
 
 export type RunListProps = MaskProps &
-  RouteComponentProps & {
+  NavigationProps & {
     disablePaging?: boolean;
     disableSelection?: boolean;
     disableSorting?: boolean;
@@ -84,7 +86,12 @@ interface RunListState {
   runs: DisplayRun[];
 }
 
+function _pipelineVersionKey(pipelineId: string, pipelineVersionId: string): string {
+  return `${pipelineId}/${pipelineVersionId}`;
+}
+
 class RunList extends React.PureComponent<RunListProps, RunListState> {
+  private _isMounted = true;
   private _tableRef = React.createRef<CustomTable>();
 
   constructor(props: any) {
@@ -96,7 +103,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
     };
   }
 
-  public render(): JSX.Element {
+  public render(): React.JSX.Element {
     // Only show the two most prevalent metrics
     const metricMetadata: MetricMetadata[] = this.state.metrics.slice(0, 2);
     const columns: Column[] = [
@@ -131,7 +138,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       });
 
       columns.push(
-        ...metricMetadata.map(metadata => {
+        ...metricMetadata.map((metadata) => {
           return {
             customRenderer: this._metricCustomRenderer,
             flex: 0.5,
@@ -141,8 +148,8 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       );
     }
 
-    const rows: Row[] = this.state.runs.map(r => {
-      const displayMetrics = metricMetadata.map(metadata => {
+    const rows: Row[] = this.state.runs.map((r) => {
+      const displayMetrics = metricMetadata.map((metadata) => {
         const displayMetric: DisplayMetric = { metadata };
         return displayMetric;
       });
@@ -151,7 +158,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
         id: r.run.run_id!,
         otherFields: [
           r.run!.display_name,
-          r.run.state || '-',
+          r.run.state,
           getRunDurationV2(r.run),
           r.pipelineVersion,
           r.recurringRun,
@@ -195,13 +202,21 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
               this.props.experimentIdMask
                 ? ' for this experiment'
                 : this.props.namespaceMask
-                ? ' for this namespace'
-                : ''
+                  ? ' for this namespace'
+                  : ''
             }.`
           }
         />
       </div>
     );
+  }
+
+  public componentDidMount(): void {
+    this._isMounted = true;
+  }
+
+  public componentWillUnmount(): void {
+    this._isMounted = false;
   }
 
   public async refresh(): Promise<void> {
@@ -220,7 +235,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
           data-testid='run-name-link'
           data-run-id={props.id}
           data-run-name={props.value || ''}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           to={RoutePage.RUN_DETAILS.replace(':' + RouteParams.runId, props.id)}
         >
           {props.value}
@@ -243,18 +258,18 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
     const url = props.value.usePlaceholder
       ? RoutePage.PIPELINE_DETAILS_NO_VERSION.replace(':' + RouteParams.pipelineId + '?', '') +
         search
-      : !!props.value.versionId
-      ? RoutePage.PIPELINE_DETAILS.replace(
-          ':' + RouteParams.pipelineId,
-          props.value.pipelineId || '',
-        ).replace(':' + RouteParams.pipelineVersionId, props.value.versionId || '')
-      : RoutePage.PIPELINE_DETAILS_NO_VERSION.replace(
-          ':' + RouteParams.pipelineId,
-          props.value.pipelineId || '',
-        );
+      : props.value.versionId
+        ? RoutePage.PIPELINE_DETAILS.replace(
+            ':' + RouteParams.pipelineId,
+            props.value.pipelineId || '',
+          ).replace(':' + RouteParams.pipelineVersionId, props.value.versionId || '')
+        : RoutePage.PIPELINE_DETAILS_NO_VERSION.replace(
+            ':' + RouteParams.pipelineId,
+            props.value.pipelineId || '',
+          );
     if (props.value.usePlaceholder) {
       return (
-        <Link className={commonCss.link} onClick={e => e.stopPropagation()} to={url}>
+        <Link className={commonCss.link} onClick={(e) => e.stopPropagation()} to={url}>
           [View pipeline]
         </Link>
       );
@@ -262,7 +277,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       // Display name could be too long, so we show the full content in tooltip on hover.
       return (
         <Tooltip title={props.value.displayName || ''} enterDelay={300} placement='top-start'>
-          <Link className={commonCss.link} onClick={e => e.stopPropagation()} to={url}>
+          <Link className={commonCss.link} onClick={(e) => e.stopPropagation()} to={url}>
             {props.value.displayName}
           </Link>
         </Tooltip>
@@ -282,7 +297,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       props.value.id || '',
     );
     return (
-      <Link className={commonCss.link} onClick={e => e.stopPropagation()} to={url}>
+      <Link className={commonCss.link} onClick={(e) => e.stopPropagation()} to={url}>
         {props.value.displayName || '[View config]'}
       </Link>
     );
@@ -298,7 +313,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
     return (
       <Link
         className={commonCss.link}
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         to={RoutePage.EXPERIMENT_DETAILS.replace(':' + RouteParams.experimentId, props.value.id)}
       >
         {props.value.displayName}
@@ -312,9 +327,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
     return statusToIcon(props.value);
   };
 
-  public _metricBufferCustomRenderer: React.FC<CustomRendererProps<{}>> = (
-    props: CustomRendererProps<{}>,
-  ) => {
+  public _metricBufferCustomRenderer: React.FC<CustomRendererProps<{}>> = () => {
     return <div style={{ borderLeft: `1px solid ${color.divider}`, padding: '20px 0' }} />;
   };
 
@@ -330,11 +343,11 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
   };
 
   protected async _loadRuns(request: ListRequest): Promise<string> {
-    let displayRuns: DisplayRun[] = [];
+    let displayRuns: DisplayRun[];
     let nextPageToken = '';
 
     if (Array.isArray(this.props.runIdListMask)) {
-      displayRuns = this.props.runIdListMask.map(id => ({ run: { run_id: id } }));
+      displayRuns = this.props.runIdListMask.map((id) => ({ run: { run_id: id } }));
       const filter = JSON.parse(
         decodeURIComponent(request.filter || '{"predicates": []}'),
       ) as V2beta1Filter;
@@ -342,10 +355,10 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       // each run individually.
       await this._getAndSetRuns(displayRuns);
       const predicates = filter.predicates?.filter(
-        p => p.key === 'name' && p.operation === V2beta1PredicateOperation.ISSUBSTRING,
+        (p) => p.key === 'name' && p.operation === V2beta1PredicateOperation.IS_SUBSTRING,
       );
-      const substrings = predicates?.map(p => p.string_value?.toLowerCase() || '') || [];
-      displayRuns = displayRuns.filter(runDetail => {
+      const substrings = predicates?.map((p) => p.string_value?.toLowerCase() || '') || [];
+      displayRuns = displayRuns.filter((runDetail) => {
         for (const sub of substrings) {
           if (!runDetail?.run?.display_name?.toLowerCase().includes(sub)) {
             return false;
@@ -369,7 +382,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
               operation:
                 this.props.storageState === V2beta1RunStorageState.ARCHIVED
                   ? V2beta1PredicateOperation.EQUALS
-                  : V2beta1PredicateOperation.NOTEQUALS,
+                  : V2beta1PredicateOperation.NOT_EQUALS,
               string_value: V2beta1RunStorageState.ARCHIVED.toString(),
             },
           ]);
@@ -387,9 +400,10 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
           request.pageSize,
           request.sortBy,
           request.filter,
+          /* skip_count */ true, // this page never displays the total run count
         );
 
-        displayRuns = (response.runs || []).map(r => ({ run: r }));
+        displayRuns = (response.runs || []).map((r) => ({ run: r }));
         nextPageToken = response.next_page_token || '';
       } catch (err) {
         const error = new Error(await errorToMessage(err));
@@ -401,11 +415,17 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
 
     await this._setColumns(displayRuns);
 
-    this.setState({
+    this.setStateSafe({
       // metrics: RunUtils.extractMetricMetadata(displayRuns.map(r => r.run)),
       runs: displayRuns,
     });
     return nextPageToken;
+  }
+
+  private setStateSafe(newState: Partial<RunListState>, cb?: () => void): void {
+    if (this._isMounted) {
+      this.setState(newState as any, cb);
+    }
   }
 
   private async _setColumns(displayRuns: DisplayRun[]): Promise<DisplayRun[]> {
@@ -429,18 +449,21 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
       experimentsGetError = 'Failed to get associated experiment: ' + (await errorToMessage(error));
     }
 
+    const { pipelineVersionsByKey, errorsByKey } =
+      await this._getReferencedPipelineVersions(displayRuns);
+
     return Promise.all(
-      displayRuns.map(async displayRun => {
+      displayRuns.map(async (displayRun) => {
         this._setRecurringRun(displayRun);
 
-        await this._getAndSetPipelineVersionNames(displayRun);
+        this._setPipelineVersionName(displayRun, pipelineVersionsByKey, errorsByKey);
 
         if (!this.props.hideExperimentColumn) {
           const experimentId = displayRun.run.experiment_id;
 
           if (experimentId) {
             const experiment = experimentsResponse?.experiments?.find(
-              e => e.experiment_id === displayRun.run.experiment_id,
+              (e) => e.experiment_id === displayRun.run.experiment_id,
             );
             // If matching experiment id not found (typically because it has been deleted), set display name to "-".
             const displayName = experiment?.display_name || '-';
@@ -472,7 +495,7 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
    */
   private _getAndSetRuns(displayRuns: DisplayRun[]): Promise<DisplayRun[]> {
     return Promise.all(
-      displayRuns.map(async displayRun => {
+      displayRuns.map(async (displayRun) => {
         let getRunResponse: V2beta1Run;
         try {
           getRunResponse = await Apis.runServiceApiV2.getRun(displayRun.run!.run_id!);
@@ -486,30 +509,77 @@ class RunList extends React.PureComponent<RunListProps, RunListState> {
   }
 
   /**
-   * For the given DisplayRun, get its ApiRun and retrieve that ApiRun's Pipeline ID if it has one,
-   * then use that Pipeline ID to fetch its associated Pipeline and attach that Pipeline's name to
-   * the DisplayRun. If the ApiRun has no Pipeline ID, then the corresponding DisplayRun will show
-   * '-'.
+   * Fetches each unique (pipeline_id, pipeline_version_id) pair referenced by the given runs
+   * exactly once, instead of fetching a pipeline version per run. Most runs on a page share
+   * only a handful of distinct pipeline versions, so this turns what used to be one API call
+   * per run into one call per unique version.
    */
-  private async _getAndSetPipelineVersionNames(displayRun: DisplayRun): Promise<void> {
+  private async _getReferencedPipelineVersions(displayRuns: DisplayRun[]): Promise<{
+    pipelineVersionsByKey: Map<string, V2beta1PipelineVersion>;
+    errorsByKey: Map<string, string>;
+  }> {
+    const uniqueVersionRefs = new Map<string, { pipelineId: string; pipelineVersionId: string }>();
+    displayRuns.forEach((displayRun) => {
+      const pipelineId = displayRun.run.pipeline_version_reference?.pipeline_id;
+      const pipelineVersionId = displayRun.run.pipeline_version_reference?.pipeline_version_id;
+      if (pipelineId && pipelineVersionId) {
+        uniqueVersionRefs.set(_pipelineVersionKey(pipelineId, pipelineVersionId), {
+          pipelineId,
+          pipelineVersionId,
+        });
+      }
+    });
+
+    const pipelineVersionsByKey = new Map<string, V2beta1PipelineVersion>();
+    const errorsByKey = new Map<string, string>();
+    await Promise.all(
+      Array.from(uniqueVersionRefs.entries()).map(
+        async ([key, { pipelineId, pipelineVersionId }]) => {
+          try {
+            const pipelineVersion = await Apis.pipelineServiceApiV2.getPipelineVersion(
+              pipelineId,
+              pipelineVersionId,
+            );
+            pipelineVersionsByKey.set(key, pipelineVersion);
+          } catch (err) {
+            errorsByKey.set(key, await errorToMessage(err));
+            logger.error(
+              `Failed to get pipeline version ${pipelineVersionId} for pipeline ${pipelineId}`,
+              err,
+            );
+          }
+        },
+      ),
+    );
+    return { pipelineVersionsByKey, errorsByKey };
+  }
+
+  /**
+   * For the given DisplayRun, look up its associated pipeline version from the already-fetched
+   * pipelineVersionsByKey batch and attach its name to the DisplayRun. If the ApiRun has no
+   * Pipeline ID, then the corresponding DisplayRun will show '-'.
+   */
+  private _setPipelineVersionName(
+    displayRun: DisplayRun,
+    pipelineVersionsByKey: Map<string, V2beta1PipelineVersion>,
+    errorsByKey: Map<string, string>,
+  ): void {
     const pipelineId = displayRun.run.pipeline_version_reference?.pipeline_id;
     const pipelineVersionId = displayRun.run.pipeline_version_reference?.pipeline_version_id;
     if (pipelineId && pipelineVersionId) {
-      try {
-        const pipelineVersion = await Apis.pipelineServiceApiV2.getPipelineVersion(
-          pipelineId,
-          pipelineVersionId,
-        );
+      const key = _pipelineVersionKey(pipelineId, pipelineVersionId);
+      const pipelineVersion = pipelineVersionsByKey.get(key);
+      if (pipelineVersion) {
         displayRun.pipelineVersion = {
           displayName: pipelineVersion.display_name,
           pipelineId: pipelineVersion.pipeline_id,
           usePlaceholder: false,
           versionId: pipelineVersion.pipeline_version_id,
         };
-      } catch (err) {
+      } else {
+        const errorMessage = errorsByKey.get(key);
         displayRun.error =
-          'Failed to get associated pipeline version: ' + (await errorToMessage(err));
-        return;
+          'Failed to get associated pipeline version' + (errorMessage ? ': ' + errorMessage : '');
       }
     } else if (displayRun.run.pipeline_spec) {
       // pipeline_spec in v2 can store either workflow_manifest or pipeline_manifest

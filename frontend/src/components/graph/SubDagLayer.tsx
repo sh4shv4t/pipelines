@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-import grey from '@material-ui/core/colors/grey';
 import * as React from 'react';
 import { classes, stylesheet } from 'typestyle';
-import { color, commonCss, fonts, padding } from 'src/mlmd/Css';
-import { color as commonColor } from 'src/Css';
-import ArrowRightAltIcon from '@material-ui/icons/ArrowRightAlt';
+import { color, commonCss, fonts, padding } from 'src/Css';
+import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt';
+import { grey } from '@mui/material/colors';
 
 export interface SubDagLayerProps {
   layers: string[];
@@ -32,7 +31,7 @@ interface History {
   layer: string;
   path: string;
 }
-const baseLinkButton: React.CSSProperties = {
+const baseLinkButton = {
   backgroundColor: 'transparent',
   border: 'none',
   cursor: 'pointer',
@@ -78,7 +77,7 @@ const actionBarCss = stylesheet({
     ...baseBreadcrumb,
     $nest: {
       '&:hover': {
-        color: commonColor.linkLight,
+        color: color.linkLight,
         textDecoration: 'underline',
       },
     },
@@ -115,7 +114,7 @@ const SubDagLayer: React.FC<SubDagLayerProps> = ({ layers, onLayersUpdate: setLa
     path += '/' + layer;
   }
 
-  const breadcrumbs: JSX.Element[] = [
+  const breadcrumbs: React.JSX.Element[] = [
     <span className={classes(actionBarCss.workspace)} key='workspace'>
       {'Layers'}
     </span>,

@@ -74,11 +74,11 @@ func (e *Experiment) GetModelName() string {
 	return "experiments"
 }
 
-func (e *Experiment) GetField(name string) (string, bool) {
+func (e *Experiment) GetField(name string) (string, string, bool) {
 	if field, ok := experimentAPIToModelFieldMap[name]; ok {
-		return field, true
+		return field, field, true
 	}
-	return "", false
+	return "", "", false
 }
 
 func (e *Experiment) GetFieldValue(name string) interface{} {
@@ -108,4 +108,14 @@ func (e *Experiment) GetSortByFieldPrefix(name string) string {
 
 func (e *Experiment) GetKeyFieldPrefix() string {
 	return "experiments."
+}
+
+var experimentCaseInsensitiveFields = map[string]struct{}{
+	"name":         {},
+	"display_name": {},
+	"description":  {},
+}
+
+func (e *Experiment) CaseInsensitiveFields() map[string]struct{} {
+	return experimentCaseInsensitiveFields
 }

@@ -14,13 +14,7 @@
  * limitations under the License.
  */
 
-import Button from '@material-ui/core/Button';
-import FormControl from '@material-ui/core/FormControl';
-import InputLabel from '@material-ui/core/InputLabel';
-import MenuItem from '@material-ui/core/MenuItem';
-import Paper from '@material-ui/core/Paper';
-import Select from '@material-ui/core/Select';
-import InfoIcon from '@material-ui/icons/InfoOutlined';
+import InfoIcon from '@mui/icons-material/InfoOutlined';
 import * as React from 'react';
 import { useState } from 'react';
 import { ApiPipeline, ApiPipelineVersion } from 'src/apis/pipeline';
@@ -29,13 +23,16 @@ import { PipelineSpecTabContent } from 'src/components/PipelineSpecTabContent';
 import { classes, stylesheet } from 'typestyle';
 import MD2Tabs from '../atoms/MD2Tabs';
 import { Description } from '../components/Description';
-import Graph from '../components/Graph';
+import PipelineGraph from '../components/Graph';
 import ReduceGraphSwitch from '../components/ReduceGraphSwitch';
 import SidePanel from '../components/SidePanel';
 import StaticNodeDetails from '../components/StaticNodeDetails';
 import { color, commonCss, fonts, fontsize, padding, zIndex } from '../Css';
 import * as StaticGraphParser from '../lib/StaticGraphParser';
-import { formatDateString, logger } from '../lib/Utils';
+import { formatDateString, logger, sanitizeExternalHref } from '../lib/Utils';
+
+import { Button, FormControl, InputLabel, MenuItem, Paper, Select } from '@mui/material';
+import type { DagreGraph } from '../lib/GraphTypes';
 
 const summaryCardWidth = 500;
 
@@ -85,8 +82,8 @@ export const css = stylesheet({
 });
 
 export interface PipelineDetailsV1Props {
-  graph: dagre.graphlib.Graph | null;
-  reducedGraph: dagre.graphlib.Graph | null;
+  graph: DagreGraph | null;
+  reducedGraph: DagreGraph | null;
   pipeline: ApiPipeline | null;
   templateString?: string;
   updateBanner: (bannerProps: BannerProps) => void;
@@ -113,14 +110,14 @@ const PipelineDetailsV1: React.FC<PipelineDetailsV1Props> = ({
 
   let selectedNodeInfo: StaticGraphParser.SelectedNodeInfo | null = null;
   if (graphToShow && graphToShow.node(selectedNodeId)) {
-    selectedNodeInfo = graphToShow.node(selectedNodeId).info;
+    selectedNodeInfo = graphToShow.node(selectedNodeId).info ?? null;
     if (!!selectedNodeId && !selectedNodeInfo) {
       logger.error(`Node with ID: ${selectedNodeId} was not found in the graph`);
     }
   }
 
   const createVersionUrl = () => {
-    return selectedVersion!.code_source_url!;
+    return sanitizeExternalHref(selectedVersion?.code_source_url);
   };
 
   return (
@@ -154,14 +151,17 @@ const PipelineDetailsV1: React.FC<PipelineDetailsV1Props> = ({
                     {versions.length && (
                       <React.Fragment>
                         <form autoComplete='off'>
-                          <FormControl>
+                          <FormControl variant='standard'>
                             <InputLabel>Version</InputLabel>
                             <Select
+                              variant='standard'
                               data-testid='version_selector'
                               value={
                                 selectedVersion ? selectedVersion.id : pipeline.default_version!.id!
                               }
-                              onChange={event => handleVersionSelected(event.target.value)}
+                              onChange={(event) =>
+                                handleVersionSelected(event.target.value as string)
+                              }
                               inputProps={{ id: 'version-selector', name: 'selectedVersion' }}
                             >
                               {versions.map((v, _) => (
@@ -172,11 +172,13 @@ const PipelineDetailsV1: React.FC<PipelineDetailsV1Props> = ({
                             </Select>
                           </FormControl>
                         </form>
-                        <div className={css.summaryKey}>
-                          <a href={createVersionUrl()} target='_blank' rel='noopener noreferrer'>
-                            Version source
-                          </a>
-                        </div>
+                        {createVersionUrl() && (
+                          <div className={css.summaryKey}>
+                            <a href={createVersionUrl()} target='_blank' rel='noopener noreferrer'>
+                              Version source
+                            </a>
+                          </div>
+                        )}
                       </React.Fragment>
                     )}
                     <div className={css.summaryKey}>Uploaded on</div>
@@ -204,10 +206,10 @@ const PipelineDetailsV1: React.FC<PipelineDetailsV1Props> = ({
                   </Paper>
                 )}
 
-                <Graph
+                <PipelineGraph
                   graph={graphToShow}
                   selectedNodeId={selectedNodeId}
-                  onClick={id => setSelectedNodeId(id)}
+                  onClick={(id) => setSelectedNodeId(id)}
                   onError={(message, additionalInfo) => {
                     updateBanner({ message, additionalInfo, mode: 'error' });
                   }}
@@ -216,7 +218,7 @@ const PipelineDetailsV1: React.FC<PipelineDetailsV1Props> = ({
                 <ReduceGraphSwitch
                   disabled={!reducedGraph}
                   checked={showReducedGraph}
-                  onChange={_ => {
+                  onChange={(_) => {
                     setShowReducedGraph(!showReducedGraph);
                   }}
                 />

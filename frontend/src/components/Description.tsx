@@ -15,7 +15,7 @@
  */
 
 import React from 'react';
-import Markdown from 'markdown-to-jsx';
+import { compiler } from 'markdown-to-jsx/react';
 import { ExternalLink } from '../atoms/ExternalLink';
 
 function preventEventBubbling(e: React.MouseEvent): void {
@@ -36,9 +36,31 @@ const optionsForceInline = {
   forceInline: true,
 };
 
+/**
+ * Normalize list markers to Unicode bullets so inline descriptions display
+ * them as visible text rather than parsing them as emphasis.
+ */
+function preserveListMarkers(text: string): string {
+  return text.replace(/^(\s*)[*\-+] /gm, '$1\u2022 ');
+}
+
 export const Description: React.FC<{ description: string; forceInline?: boolean }> = ({
   description,
   forceInline,
 }) => {
-  return <Markdown options={forceInline ? optionsForceInline : options}>{description}</Markdown>;
+  const text = forceInline ? preserveListMarkers(description) : description;
+  // compiler() intentionally bypasses MarkdownContext: Description renders only
+  // with its local link and raw-HTML policy instead of merging provider options.
+  const rendered = React.useMemo(
+    () => compiler(text, forceInline ? optionsForceInline : options),
+    [forceInline, text],
+  );
+
+  // v7 wrapped bare text and empty descriptions in a span. Preserve that stable
+  // element root without forcing wrappers around links, formatting, or blocks.
+  return rendered === null || typeof rendered === 'string' ? (
+    <span>{rendered}</span>
+  ) : (
+    <>{rendered}</>
+  );
 };

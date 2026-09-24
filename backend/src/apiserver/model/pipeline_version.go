@@ -52,6 +52,11 @@ type PipelineVersion struct {
 	Description     LargeText `gorm:"column:Description;"`
 	PipelineSpec    LargeText `gorm:"column:PipelineSpec; not null;"`    // Same as common.MaxFileLength (32MB in server). Argo imposes 700kB limit
 	PipelineSpecURI LargeText `gorm:"column:PipelineSpecURI; not null;"` // Can store references to ObjectStore files
+
+	// Tags holds user-defined key-value pairs for this pipeline version.
+	// Tags are stored in a separate table (pipeline_version_tags) and loaded/saved via custom logic,
+	// not via GORM's standard column mapping.
+	Tags map[string]string `gorm:"-"`
 }
 
 func (p PipelineVersion) GetValueOfPrimaryKey() string {
@@ -92,11 +97,11 @@ func (p *PipelineVersion) GetModelName() string {
 func (PipelineVersion) TableName() string {
 	return "pipeline_versions"
 }
-func (p *PipelineVersion) GetField(name string) (string, bool) {
+func (p *PipelineVersion) GetField(name string) (string, string, bool) {
 	if field, ok := p.APIToModelFieldMap()[name]; ok {
-		return field, true
+		return field, field, true
 	}
-	return "", false
+	return "", "", false
 }
 
 func (p *PipelineVersion) GetFieldValue(name string) interface{} {
@@ -130,4 +135,14 @@ func (p *PipelineVersion) GetSortByFieldPrefix(name string) string {
 
 func (p *PipelineVersion) GetKeyFieldPrefix() string {
 	return "pipeline_versions."
+}
+
+var pipelineVersionCaseInsensitiveFields = map[string]struct{}{
+	"name":         {},
+	"display_name": {},
+	"description":  {},
+}
+
+func (p *PipelineVersion) CaseInsensitiveFields() map[string]struct{} {
+	return pipelineVersionCaseInsensitiveFields
 }

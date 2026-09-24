@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import { Handler } from 'express';
-import * as k8sHelper from '../k8s-helper';
 import {
   createPodLogsMinioRequestConfig,
   composePodLogsStreamHandler,
   getPodLogsStreamFromK8s,
-  getPodLogsStreamFromWorkflow,
+  createPodLogsStreamFromWorkflow,
   toGetPodLogsStream,
-} from '../workflow-helper';
-import { ArgoConfigs, MinioConfigs, AWSConfigs } from '../configs';
-import { AuthorizeRequestResources, AuthorizeRequestVerb } from '../src/generated/apis/auth';
-import { AuthorizeFn } from '../helpers/auth';
+} from '../workflow-helper.js';
+import { ArgoConfigs, MinioConfigs, AWSConfigs } from '../configs.js';
+import {
+  AuthorizeRequestResources,
+  AuthorizeRequestVerb,
+} from '../src/generated/apis/auth/index.js';
+import { AuthorizeFn } from '../helpers/auth.js';
+import { getArtifactStoreOrigin } from '../minio-helper.js';
 
 /**
  * Returns a handler which attempts to retrieve the logs for the specific pod,
@@ -33,15 +36,18 @@ import { AuthorizeFn } from '../helpers/auth';
  * @param argoOptions fallback options to retrieve log archive
  * @param artifactsOptions configs and credentials for the different artifact backend
  * @param authorizeFn function to authorize namespace access
+ * @param authEnabled whether namespace authorization checks are enabled
  */
 export function getPodLogsHandler(
   argoOptions: ArgoConfigs,
   artifactsOptions: {
     minio: MinioConfigs;
     aws: AWSConfigs;
+    allowedEndpoints?: string[];
   },
   podLogContainerName: string,
   authorizeFn: AuthorizeFn,
+  authEnabled: boolean,
 ): Handler {
   const {
     archiveLogs,
@@ -50,6 +56,14 @@ export function getPodLogsHandler(
     keyFormat,
     artifactRepositoriesLookup,
   } = argoOptions;
+
+  const trustedEndpoints = [
+    getArtifactStoreOrigin(artifactsOptions.minio),
+    getArtifactStoreOrigin(artifactsOptions.aws),
+    ...(argoOptions.artifactRepositoryEndpoints || []),
+    ...(artifactsOptions.allowedEndpoints || []),
+  ].filter((endpoint): endpoint is string => endpoint !== undefined);
+  const getPodLogsStreamFromWorkflow = createPodLogsStreamFromWorkflow(trustedEndpoints);
 
   // get pod log from the provided bucket and keyFormat.
   const getPodLogsStreamFromArchive = toGetPodLogsStream(
@@ -75,6 +89,10 @@ export function getPodLogsHandler(
   );
 
   return async (req, res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', 'attachment');
+    res.type('text/plain');
+
     if (!req.query.podname) {
       res.status(400).send('podname argument is required');
       return;
@@ -85,6 +103,12 @@ export function getPodLogsHandler(
     // This is optional.
     // Note decodeURIComponent(undefined) === 'undefined', so I cannot pass the argument directly.
     const podNamespace = decodeURIComponent((req.query.podnamespace as string) || '') || undefined;
+
+    // In multi-user mode, namespace must be explicit so authz cannot be bypassed.
+    if (authEnabled && !podNamespace) {
+      res.status(422).send('podnamespace argument is required');
+      return;
+    }
 
     // Check access to namespace if podNamespace is provided
     if (podNamespace) {
@@ -110,7 +134,28 @@ export function getPodLogsHandler(
 
     try {
       const stream = await getPodLogsStream(podName, createdAt, podNamespace);
-      stream.on('error', err => {
+      if (res.destroyed || res.writableEnded) {
+        stream.destroy();
+        return;
+      }
+      let settled = false;
+      const cleanup = () => {
+        stream.off('error', failOnce);
+        stream.off('end', finishOnce);
+        res.off('close', stopOnPrematureClose);
+      };
+      const failOnce = (err: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        stream.destroy();
+        if (res.headersSent) {
+          console.error('[pod-logs] aborting committed response:', err);
+          res.destroy();
+          return;
+        }
         if (
           err?.message &&
           err.message?.indexOf('Unable to find pod log archive information') > -1
@@ -119,9 +164,39 @@ export function getPodLogsHandler(
         } else {
           res.status(500).send('Could not get main container logs: ' + err);
         }
-      });
-      stream.on('end', () => res.end());
-      stream.pipe(res);
+      };
+      const finishOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        res.end();
+      };
+      const stopOnPrematureClose = () => {
+        if (settled || res.writableFinished) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        stream.destroy();
+      };
+      stream.once('error', failOnce);
+      stream.once('end', finishOnce);
+      res.once('close', stopOnPrematureClose);
+
+      // getObjectStream starts its pipeline before returning. A fast storage
+      // failure can therefore precede this request-specific listener; inspect
+      // the terminal state after attaching it so no event can fall in between.
+      if (stream.errored) {
+        failOnce(stream.errored);
+        return;
+      }
+      if (stream.destroyed) {
+        failOnce(new Error('Pod log stream closed before response streaming started'));
+        return;
+      }
+      stream.pipe(res, { end: false });
     } catch (err) {
       res.status(500).send('Could not get main container logs: ' + err);
     }

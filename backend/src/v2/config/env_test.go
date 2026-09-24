@@ -15,12 +15,18 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kubeflow/pipelines/backend/src/v2/objectstore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
 )
 
@@ -39,7 +45,7 @@ func Test_getDefaultMinioSessionInfo(t *testing.T) {
 		Provider: "minio",
 		Params: map[string]string{
 			"region":       "minio",
-			"endpoint":     "minio-service.kubeflow:9000",
+			"endpoint":     "seaweedfs.kubeflow:9000",
 			"disableSSL":   "true",
 			"fromEnv":      "false",
 			"secretName":   "mlpipeline-minio-artifact",
@@ -104,7 +110,7 @@ func TestGetBucketSessionInfo(t *testing.T) {
 				Provider: "minio",
 				Params: map[string]string{
 					"region":       "minio",
-					"endpoint":     "minio-service.kubeflow:9000",
+					"endpoint":     "seaweedfs.kubeflow:9000",
 					"disableSSL":   "true",
 					"fromEnv":      "false",
 					"secretName":   "mlpipeline-minio-artifact",
@@ -143,7 +149,7 @@ func TestGetBucketSessionInfo(t *testing.T) {
 				Provider: "minio",
 				Params: map[string]string{
 					"region":       "minio",
-					"endpoint":     "minio-service.kubeflow:9000",
+					"endpoint":     "seaweedfs.kubeflow:9000",
 					"disableSSL":   "true",
 					"fromEnv":      "false",
 					"secretName":   "mlpipeline-minio-artifact",
@@ -161,7 +167,7 @@ func TestGetBucketSessionInfo(t *testing.T) {
 				Provider: "minio",
 				Params: map[string]string{
 					"region":       "minio",
-					"endpoint":     "minio-service.kubeflow:9000",
+					"endpoint":     "seaweedfs.kubeflow:9000",
 					"disableSSL":   "true",
 					"fromEnv":      "false",
 					"secretName":   "mlpipeline-minio-artifact",
@@ -350,7 +356,7 @@ func TestGetBucketSessionInfo(t *testing.T) {
 					"accessKeyKey":   "s3-test-accessKeyKey-6-b",
 					"secretKeyKey":   "s3-test-secretKeyKey-6-b",
 					"forcePathStyle": "false",
-					"maxRetries":     "5",
+					"maxRetries":     "9",
 				},
 			},
 			testDataCase: "case6",
@@ -539,6 +545,151 @@ func Test_QueryParameters(t *testing.T) {
 			assert.Equal(t, test.expectedSessionInfo, actualSession)
 		})
 	}
+}
+
+func TestHasExplicitBucketOverride(t *testing.T) {
+	config := Config{data: map[string]string{
+		"providers": `
+minio:
+  default:
+    endpoint: default-endpoint
+    credentials:
+      secretRef:
+        secretName: default-secret
+        accessKeyKey: accesskey
+        secretKeyKey: secretkey
+  Overrides:
+    - bucketName: allowlisted-bucket
+      keyPrefix: allowed/
+      endpoint: override-endpoint
+      credentials:
+        secretRef:
+          secretName: override-secret
+          accessKeyKey: accesskey
+          secretKeyKey: secretkey
+`,
+	}}
+
+	hasOverride, err := config.HasExplicitBucketOverride("minio://allowlisted-bucket/allowed/path")
+	require.NoError(t, err)
+	assert.True(t, hasOverride)
+
+	hasOverride, err = config.HasExplicitBucketOverride("minio://allowlisted-bucket/other/path")
+	require.NoError(t, err)
+	assert.False(t, hasOverride)
+}
+
+func TestIsPathUnderDefaultPipelineRoot(t *testing.T) {
+	config := Config{data: map[string]string{
+		configKeyDefaultPipelineRoot: "minio://mlpipeline/v2/artifacts/root?endpoint=root-endpoint&region=us-east-1",
+	}}
+
+	underRoot, err := config.IsPathUnderDefaultPipelineRoot("minio://mlpipeline/v2/artifacts/root/run-1/output")
+	require.NoError(t, err)
+	assert.True(t, underRoot)
+
+	underRoot, err = config.IsPathUnderDefaultPipelineRoot("minio://other-bucket/v2/artifacts/root/run-1/output")
+	require.NoError(t, err)
+	assert.False(t, underRoot)
+}
+
+func TestInPodName_PrefersKFPPodNameEnvVar(t *testing.T) {
+	t.Setenv("KFP_POD_NAME", "my-workflow-pod-abc123")
+	podName, err := InPodName()
+	require.NoError(t, err)
+	assert.Equal(t, "my-workflow-pod-abc123", podName)
+}
+
+func TestInPodName_HandlesLongPodName(t *testing.T) {
+	// Pod names can exceed the 63-character hostname limit. The downward API
+	// env var must return the full name; falling back to /etc/hostname would
+	// silently truncate it and cause a "pod not found" error at runtime.
+	longName := "here-is-a-pipeline-very-long-name-x25ts-system-container-driver-2462380069"
+
+	t.Setenv("KFP_POD_NAME", longName)
+	podName, err := InPodName()
+	require.NoError(t, err)
+	assert.Equal(t, longName, podName)
+}
+
+func TestInPodName_IgnoresEmptyEnvVar(t *testing.T) {
+	if _, err := os.Stat("/etc/hostname"); os.IsNotExist(err) {
+		t.Skip("/etc/hostname does not exist on this platform")
+	}
+	t.Setenv("KFP_POD_NAME", "")
+	podName, err := InPodName()
+	require.NoError(t, err)
+	assert.NotEmpty(t, podName)
+}
+
+func TestInPodName_FallsBackToHostname(t *testing.T) {
+	if _, err := os.Stat("/etc/hostname"); os.IsNotExist(err) {
+		t.Skip("/etc/hostname does not exist on this platform")
+	}
+	t.Setenv("KFP_POD_NAME", "")
+	err := os.Unsetenv("KFP_POD_NAME")
+	require.NoError(t, err, "failed to unset KFP_POD_NAME")
+	podName, err := InPodName()
+	require.NoError(t, err)
+	require.NotEmpty(t, podName)
+	assert.NotContains(t, podName, "\n", "hostname should not contain trailing newline")
+}
+
+func TestInPodName_ErrorsWhenBothMissing(t *testing.T) {
+	if _, err := os.Stat("/etc/hostname"); err == nil {
+		t.Skip("/etc/hostname exists; cannot test the error path on this platform")
+	}
+	t.Setenv("KFP_POD_NAME", "")
+	err := os.Unsetenv("KFP_POD_NAME")
+	require.NoError(t, err, "failed to unset KFP_POD_NAME")
+	_, err = InPodName()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod name in Pod")
+}
+
+func TestLoadLauncherConfigFromPath_PrefersMountedFiles(t *testing.T) {
+	mountPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mountPath, "defaultPipelineRoot"), []byte("s3://mounted/root"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(mountPath, "providers"), []byte("minio: {}"), 0o600))
+
+	cfg, err := LoadLauncherConfigFromPath(context.Background(), nil, "kubeflow", mountPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "s3://mounted/root", cfg.DefaultPipelineRoot())
+}
+
+func TestLoadLauncherConfigFromPath_FallsBackWhenMountMissing(t *testing.T) {
+	clientSet := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kfp-launcher",
+			Namespace: "kubeflow",
+		},
+		Data: map[string]string{
+			"defaultPipelineRoot": "minio://from-api/root",
+		},
+	})
+
+	cfg, err := LoadLauncherConfigFromPath(context.Background(), clientSet, "kubeflow", filepath.Join(t.TempDir(), "missing"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "minio://from-api/root", cfg.DefaultPipelineRoot())
+}
+
+func TestLoadLauncherConfigFromPath_EmptyMountFallsBack(t *testing.T) {
+	clientSet := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kfp-launcher",
+			Namespace: "kubeflow",
+		},
+		Data: map[string]string{
+			"defaultPipelineRoot": "minio://from-api/empty-mount",
+		},
+	})
+
+	cfg, err := LoadLauncherConfigFromPath(context.Background(), clientSet, "kubeflow", t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "minio://from-api/empty-mount", cfg.DefaultPipelineRoot())
 }
 
 func fetchProviderFromData(cases TestcaseData, name string) string {

@@ -44,10 +44,12 @@ export function initFeatures() {
   }
   if (localStorage.getItem('flags')) {
     const originalFlags = localStorage.getItem('flags');
-    let originalFlagsJSON: Feature[] = [];
+    let originalFlagsJSON: Feature[];
     try {
       originalFlagsJSON = JSON.parse(originalFlags!);
-      let originalFlagsMap = new Map(originalFlagsJSON.map(features => [features.name, features]));
+      let originalFlagsMap = new Map(
+        originalFlagsJSON.map((features) => [features.name, features]),
+      );
       for (let i = 0; i < updatedFeatures.length; i++) {
         const feature = originalFlagsMap.get(updatedFeatures[i].name);
         if (feature) {
@@ -79,7 +81,7 @@ export function saveFeatures(f: Feature[]) {
   }
 }
 
-function storageAvailable(type: string) {
+function storageAvailable(type: 'localStorage' | 'sessionStorage') {
   var storage;
   try {
     storage = window[type];
@@ -113,7 +115,7 @@ export function isFeatureEnabled(key: FeatureKey): boolean {
   }
   try {
     const parsedFlags: Feature[] = JSON.parse(stringifyFlags);
-    const feature = parsedFlags.find(feature => feature.name === key);
+    const feature = parsedFlags.find((feature) => feature.name === key);
     return feature ? feature.active : false;
   } catch (e) {
     console.log('cannot read feature flags: ' + e);

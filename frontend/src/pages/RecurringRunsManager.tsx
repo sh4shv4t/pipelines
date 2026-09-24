@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { NavigationProps } from 'src/lib/Navigation';
 import * as React from 'react';
 import BusyButton from 'src/atoms/BusyButton';
 import CustomTable, { Column, Row, CustomRendererProps } from 'src/components/CustomTable';
@@ -21,13 +22,13 @@ import Toolbar, { ToolbarActionMap } from 'src/components/Toolbar';
 import { V2beta1RecurringRun, V2beta1RecurringRunStatus } from 'src/apisv2beta1/recurringrun';
 import { Apis, JobSortKeys, ListRequest } from 'src/lib/Apis';
 import { DialogProps, RoutePage, RouteParams } from 'src/components/Router';
-import { Link } from 'react-router-dom';
-import { RouteComponentProps } from 'react-router';
-import { SnackbarProps } from '@material-ui/core/Snackbar';
+import { Link } from 'react-router';
+
+import { SnackbarProps } from '@mui/material/Snackbar';
 import { commonCss } from 'src/Css';
 import { logger, formatDateString, errorToMessage } from 'src/lib/Utils';
 
-export interface RecurringRunListProps extends RouteComponentProps {
+export interface RecurringRunListProps extends NavigationProps {
   experimentId: string;
   updateDialog: (dialogProps: DialogProps) => void;
   updateSnackbar: (snackbarProps: SnackbarProps) => void;
@@ -54,7 +55,7 @@ class RecurringRunsManager extends React.Component<RecurringRunListProps, Recurr
     };
   }
 
-  public render(): JSX.Element {
+  public render(): React.JSX.Element {
     const { runs, selectedIds, toolbarActionMap: toolbarActions } = this.state;
 
     const columns: Column[] = [
@@ -68,7 +69,7 @@ class RecurringRunsManager extends React.Component<RecurringRunListProps, Recurr
       { customRenderer: this._enabledCustomRenderer, label: '', flex: 1 },
     ];
 
-    const rows: Row[] = runs.map(r => {
+    const rows: Row[] = runs.map((r) => {
       return {
         error: r.error?.toString(),
         id: r.recurring_run_id!,
@@ -84,7 +85,7 @@ class RecurringRunsManager extends React.Component<RecurringRunListProps, Recurr
           rows={rows}
           ref={this._tableRef}
           selectedIds={selectedIds}
-          updateSelection={ids => this.setState({ selectedIds: ids })}
+          updateSelection={(ids) => this.setState({ selectedIds: ids })}
           initialSortColumn={JobSortKeys.CREATED_AT}
           reload={this._loadRuns.bind(this)}
           filterLabel='Filter recurring runs'

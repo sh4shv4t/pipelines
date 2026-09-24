@@ -42,7 +42,7 @@ class SubprocessRunner:
 
     Args:
         use_venv: Whether to run the subprocess in a virtual environment. If True, dependencies will be installed in the virtual environment. If False, dependencies will be installed in the current environment. Using a virtual environment is recommended.
-        serialize_pip_installs: Whether to serialize pip installations across parallel tasks to avoid race conditions. Only applies when use_venv=True. Default is True for safety.
+        serialize_pip_installs: Whether to serialize pip installations across parallel tasks to avoid race conditions. Default is True for safety.
         max_concurrent_pip_installs: Maximum number of concurrent pip installations when serialize_pip_installs=False. Default is 1.
     """
     use_venv: bool = True
@@ -51,12 +51,11 @@ class SubprocessRunner:
 
     def __post_init__(self):
         """Configure the pip install manager when the runner is created."""
-        if self.use_venv:
-            # Lazy import to avoid circular imports
-            from kfp.local.pip_install_manager import pip_install_manager
-            pip_install_manager.configure(
-                serialize_installs=self.serialize_pip_installs,
-                max_concurrent=self.max_concurrent_pip_installs)
+        # Lazy import to avoid circular imports
+        from kfp.local.pip_install_manager import pip_install_manager
+        pip_install_manager.configure(
+            serialize_installs=self.serialize_pip_installs,
+            max_concurrent=self.max_concurrent_pip_installs)
 
 
 class DockerRunner:
@@ -216,6 +215,8 @@ class LocalExecutionConfig:
         pipeline_root: str,
         workspace_root: str,
         raise_on_error: bool,
+        enable_caching: bool = False,
+        cache_root: Optional[str] = None,
     ) -> 'LocalExecutionConfig':
         # singleton pattern
         cls.instance = super(LocalExecutionConfig, cls).__new__(cls)
@@ -227,16 +228,24 @@ class LocalExecutionConfig:
         pipeline_root: str,
         workspace_root: str,
         raise_on_error: bool,
+        enable_caching: bool = False,
+        cache_root: Optional[str] = None,
     ) -> None:
         permitted_runners = (SubprocessRunner, DockerRunner)
         if not isinstance(runner, permitted_runners):
+            permitted_runner_names = '. '.join(
+                permitted_runner.__name__
+                for permitted_runner in permitted_runners)
             raise ValueError(
-                f'Got unknown runner {runner} of type {runner.__class__.__name__}. Runner should be one of the following types: {". ".join(prunner.__name__ for prunner in permitted_runners)}.'
-            )
+                f'Got unknown runner {runner} of type '
+                f'{runner.__class__.__name__}. Runner should be one of the '
+                f'following types: {permitted_runner_names}.')
         self.runner = runner
         self.pipeline_root = pipeline_root
         self.workspace_root = workspace_root
         self.raise_on_error = raise_on_error
+        self.enable_caching = enable_caching
+        self.cache_root = cache_root
 
     @classmethod
     def validate(cls):
@@ -252,6 +261,8 @@ def init(
     pipeline_root: str = './local_outputs',
     workspace_root: Optional[str] = None,
     raise_on_error: bool = True,
+    enable_caching: bool = False,
+    cache_root: Optional[str] = None,
 ) -> None:
     """Initializes a local execution session.
 
@@ -262,15 +273,26 @@ def init(
         pipeline_root: Destination for task outputs.
         workspace_root: Directory to use as workspace. If None, a temporary directory will be created.
         raise_on_error: If True, raises an exception when a local task execution fails. If False, fails gracefully and does not terminate the current program.
+        enable_caching: If True, enables local task output caching (off by default). Tasks with `set_caching_options(enable_caching=False)` still bypass the cache.
+        cache_root: Directory used to store cache entries. If None, defaults to `{pipeline_root}/.kfp_cache`.
     """
     # updates a global config
     pipeline_root = os.path.abspath(pipeline_root)
     if workspace_root is None:
         workspace_root = tempfile.mkdtemp(prefix='kfp-workspace-')
+    if cache_root is not None:
+        cache_root = os.path.abspath(cache_root)
 
     LocalExecutionConfig(
         runner=runner,
         pipeline_root=pipeline_root,
         workspace_root=workspace_root,
         raise_on_error=raise_on_error,
+        enable_caching=enable_caching,
+        cache_root=cache_root,
     )
+
+    # Reset the local cache singleton so a new LocalCache is created against
+    # the (possibly new) cache_root on first use.
+    from kfp.local import cache as _cache_module
+    _cache_module.reset_local_cache_singleton()

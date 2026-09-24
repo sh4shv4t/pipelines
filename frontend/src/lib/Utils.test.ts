@@ -21,21 +21,46 @@ import {
   enabledDisplayStringV2,
   errorToMessage,
   formatDateString,
-  generateMinioArtifactUrl,
-  generateS3ArtifactUrl,
   getRunDuration,
   getRunDurationFromWorkflow,
   logger,
   mergeApiParametersByNames,
+  sanitizeExternalHref,
 } from './Utils';
 import { V2beta1RecurringRunStatus } from 'src/apisv2beta1/recurringrun';
+import { expectErrors } from 'src/TestUtils';
 
 describe('Utils', () => {
+  describe('sanitizeExternalHref', () => {
+    it('returns http and https URLs unchanged', () => {
+      expect(sanitizeExternalHref('http://example.com/x')).toEqual('http://example.com/x');
+      expect(sanitizeExternalHref('https://example.com/x')).toEqual('https://example.com/x');
+      expect(sanitizeExternalHref('HTTPS://example.com/x')).toEqual('HTTPS://example.com/x');
+    });
+
+    it('rejects javascript: and other unsafe schemes', () => {
+      // eslint-disable-next-line no-script-url
+      expect(sanitizeExternalHref('javascript:alert(1)')).toBeUndefined();
+      // eslint-disable-next-line no-script-url
+      expect(sanitizeExternalHref('JAVASCRIPT:alert(1)')).toBeUndefined();
+      expect(sanitizeExternalHref('data:text/html,<script>alert(1)</script>')).toBeUndefined();
+      expect(sanitizeExternalHref('vbscript:msgbox(1)')).toBeUndefined();
+      expect(sanitizeExternalHref('ftp://example.com/x')).toBeUndefined();
+      expect(sanitizeExternalHref('//example.com')).toBeUndefined();
+      expect(sanitizeExternalHref('not a URL')).toBeUndefined();
+    });
+
+    it('returns undefined for empty or missing input', () => {
+      expect(sanitizeExternalHref('')).toBeUndefined();
+      expect(sanitizeExternalHref(undefined)).toBeUndefined();
+    });
+  });
+
   describe('log', () => {
     it('logs to console', () => {
       // tslint:disable-next-line:no-console
       const backup = console.log;
-      global.console.log = jest.fn();
+      global.console.log = vi.fn();
       logger.verbose('something to console');
       // tslint:disable-next-line:no-console
       expect(console.log).toBeCalledWith('something to console');
@@ -45,7 +70,7 @@ describe('Utils', () => {
     it('logs to console error', () => {
       // tslint:disable-next-line:no-console
       const backup = console.error;
-      global.console.error = jest.fn();
+      global.console.error = vi.fn();
       logger.error('something to console error');
       // tslint:disable-next-line:no-console
       expect(console.error).toBeCalledWith('something to console error');
@@ -126,7 +151,7 @@ describe('Utils', () => {
     it('handles a trigger according to the enabled flag (v2)', () => {
       expect(enabledDisplayStringV2({}, V2beta1RecurringRunStatus.ENABLED)).toBe('Yes');
       expect(enabledDisplayStringV2({}, V2beta1RecurringRunStatus.DISABLED)).toBe('No');
-      expect(enabledDisplayStringV2({}, V2beta1RecurringRunStatus.STATUSUNSPECIFIED)).toBe(
+      expect(enabledDisplayStringV2({}, V2beta1RecurringRunStatus.STATUS_UNSPECIFIED)).toBe(
         'Unknown',
       );
     });
@@ -290,45 +315,27 @@ describe('Utils', () => {
     });
   });
 
-  describe('generateMinioArtifactUrl', () => {
-    it('handles minio:// URIs', () => {
-      expect(generateMinioArtifactUrl('minio://my-bucket/a/b/c')).toBe(
-        'artifacts/minio/my-bucket/a/b/c',
-      );
-    });
-
-    it('handles non-minio URIs', () => {
-      expect(generateMinioArtifactUrl('minio://my-bucket-a-b-c')).toBe(undefined);
-    });
-
-    it('handles broken minio URIs', () => {
-      expect(generateMinioArtifactUrl('ZZZ://my-bucket/a/b/c')).toBe(undefined);
-    });
-  });
-
-  describe('generateS3ArtifactUrl', () => {
-    it('handles s3:// URIs', () => {
-      expect(generateS3ArtifactUrl('s3://my-bucket/a/b/c')).toBe('artifacts/s3/my-bucket/a/b/c');
-    });
-  });
-
   describe('decodeCompressedNodes', () => {
     it('decompress encoded gzipped json', async () => {
       let compressedNodes =
         'H4sIAAAAAAACE6tWystPSS1WslKIrlbKS8xNBbLAQoZKOgpKmSlArmFtbC0A+U7xAicAAAA=';
-      expect(decodeCompressedNodes(compressedNodes)).resolves.toEqual({
+      await expect(decodeCompressedNodes(compressedNodes)).resolves.toEqual({
         nodes: [{ name: 'node1', id: 1 }],
       });
 
       compressedNodes = 'H4sIAAAAAAACE6tWystPSTVUslKoVspMAVJQfm0tAEBEv1kaAAAA';
-      expect(decodeCompressedNodes(compressedNodes)).resolves.toEqual({ node1: { id: 'node1' } });
+      await expect(decodeCompressedNodes(compressedNodes)).resolves.toEqual({
+        node1: { id: 'node1' },
+      });
     });
 
     it('raise exception if failed to decompress data', async () => {
+      const assertErrors = expectErrors();
       let compressedNodes = 'I4sIAAAAAAACE6tWystPSS1WslKIrlxNBbLAQoZKOgpKmSlArmFtbC0A+U7xAicAAAA=';
       await expect(decodeCompressedNodes(compressedNodes)).rejects.toEqual(
         'failed to ungzip data: incorrect header check',
       );
+      assertErrors();
     });
   });
 

@@ -43,14 +43,14 @@ interface MetricProps {
 }
 
 class Metric extends React.PureComponent<MetricProps> {
-  public render(): JSX.Element {
+  public render(): React.JSX.Element {
     const { metric, metadata } = this.props;
     if (!metric || metric.number_value === undefined) {
       return <div />;
     }
 
     const displayString = MetricUtils.getMetricDisplayString(metric);
-    let width = '';
+    let width: string;
 
     if (metric.format === RunMetricFormat.PERCENTAGE) {
       width = `calc(${displayString})`;

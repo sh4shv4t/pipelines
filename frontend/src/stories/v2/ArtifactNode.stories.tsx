@@ -14,18 +14,10 @@
  * limitations under the License.
  */
 
-import { ComponentMeta, ComponentStory } from '@storybook/react';
-import React from 'react';
-import ReactFlow, {
-  Background,
-  Controls,
-  MiniMap,
-  OnLoadParams,
-  ReactFlowProvider,
-} from 'react-flow-renderer';
+import { Meta, StoryObj } from '@storybook/react';
+import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import 'src/build/tailwind.output.css';
-import { color } from 'src/Css';
-import { Artifact } from 'src/third_party/mlmd';
 import ArtifactNode from '../../components/graph/ArtifactNode';
 
 const nodeTypes = {
@@ -35,20 +27,16 @@ const nodeTypes = {
 interface WrappedArtifactNodeProps {
   id: string;
   label: string;
-  state: Artifact.State;
+  hasArtifact: boolean;
 }
 
-function WrappedArtifactNode({ id, label, state }: WrappedArtifactNodeProps) {
-  const onLoad = (reactFlowInstance: OnLoadParams) => {
-    reactFlowInstance.fitView();
-  };
-
-  const elements = [
+function WrappedArtifactNode({ id, label, hasArtifact }: WrappedArtifactNodeProps) {
+  const nodes = [
     {
       id: id,
       type: 'artifact',
       position: { x: 100, y: 100 },
-      data: { label, state },
+      data: { label, hasArtifact },
     },
   ];
 
@@ -61,11 +49,12 @@ function WrappedArtifactNode({ id, label, state }: WrappedArtifactNodeProps) {
       <ReactFlowProvider>
         <ReactFlow
           style={{ background: '#F5F5F5' }}
-          elements={elements}
+          nodes={nodes}
+          edges={[]}
           snapToGrid={true}
           nodeTypes={nodeTypes}
           edgeTypes={{}}
-          onLoad={onLoad}
+          onInit={(instance) => instance.fitView()}
         >
           <MiniMap />
           <Controls />
@@ -76,27 +65,25 @@ function WrappedArtifactNode({ id, label, state }: WrappedArtifactNodeProps) {
   );
 }
 
-export default {
+const meta: Meta<typeof WrappedArtifactNode> = {
   title: 'v2/ArtifactNode',
   component: WrappedArtifactNode,
-  argTypes: {
-    backgroundColor: { control: 'color' },
-  },
-} as ComponentMeta<typeof WrappedArtifactNode>;
-
-const Template: ComponentStory<typeof WrappedArtifactNode> = args => (
-  <WrappedArtifactNode {...args} />
-);
-
-export const Primary = Template.bind({});
-Primary.args = {
-  id: 'id',
-  label: 'This is an ArtifactNode',
-  state: Artifact.State.LIVE,
 };
 
-export const Secondary = Template.bind({});
-Secondary.args = {
-  id: 'id',
-  label: 'This is an ArtifactNode with long name',
+export default meta;
+type Story = StoryObj<typeof WrappedArtifactNode>;
+
+export const Primary: Story = {
+  args: {
+    id: 'id',
+    label: 'This is an ArtifactNode',
+    hasArtifact: true,
+  },
+};
+
+export const Secondary: Story = {
+  args: {
+    id: 'id',
+    label: 'This is an ArtifactNode with long name',
+  },
 };

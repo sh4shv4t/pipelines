@@ -15,11 +15,11 @@
  */
 
 import * as React from 'react';
-import Tooltip from '@material-ui/core/Tooltip';
-import WarningIcon from '@material-ui/icons/WarningRounded';
+import WarningIcon from '@mui/icons-material/WarningRounded';
 import { Row, Column } from './CustomTable';
 import { color, fonts, fontsize } from '../Css';
 import { stylesheet } from 'typestyle';
+import { Tooltip } from '@mui/material';
 
 export const css = stylesheet({
   cell: {
@@ -69,8 +69,8 @@ interface CustomTableRowProps {
 }
 
 function calculateColumnWidths(columns: Column[]): number[] {
-  const totalFlex = columns.reduce((total, c) => (total += c.flex || 1), 0);
-  return columns.map(c => ((c.flex || 1) / totalFlex) * 100);
+  const totalFlex = columns.reduce((total, c) => total + (c.flex || 1), 0);
+  return columns.map((c) => ((c.flex || 1) / totalFlex) * 100);
 }
 
 // tslint:disable-next-line:variable-name

@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
+import { NavigationProps } from 'src/lib/Navigation';
 import * as React from 'react';
-import { RouteComponentProps } from 'react-router';
+
 import { ToolbarProps } from '../components/Toolbar';
 import { BannerProps } from '../components/Banner';
-import { SnackbarProps } from '@material-ui/core/Snackbar';
+import { SnackbarProps } from '@mui/material/Snackbar';
 import { DialogProps } from '../components/Router';
 import { errorToMessage } from '../lib/Utils';
 
-export interface PageProps extends RouteComponentProps {
+/**
+ * Route params are read by RouteParams key (see src/components/Router.tsx), so
+ * the params bag is indexed by string rather than by a fixed set of keys.
+ */
+export interface PageProps extends NavigationProps<{ [param: string]: string | undefined }> {
   toolbarProps: ToolbarProps;
   updateBanner: (bannerProps: BannerProps) => void;
   updateDialog: (dialogProps: DialogProps) => void;
@@ -32,7 +37,7 @@ export interface PageProps extends RouteComponentProps {
 
 export type PageErrorHandler = (
   message: string,
-  error?: Error,
+  error?: unknown,
   mode?: 'error' | 'warning',
   refresh?: () => Promise<void>,
 ) => Promise<void>;
@@ -45,7 +50,7 @@ export abstract class Page<P, S> extends React.Component<P & PageProps, S> {
     this.props.updateToolbar(this.getInitialToolbarState());
   }
 
-  public abstract render(): JSX.Element;
+  public abstract render(): React.JSX.Element;
 
   public abstract getInitialToolbarState(): ToolbarProps;
 
@@ -57,6 +62,7 @@ export abstract class Page<P, S> extends React.Component<P & PageProps, S> {
   }
 
   public componentDidMount(): void {
+    this._isMounted = true;
     this.clearBanner();
   }
 

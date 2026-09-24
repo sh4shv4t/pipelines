@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as React from 'react';
+import type * as React from 'react';
 import Buttons, { ButtonKeys } from 'src/lib/Buttons';
 import DetailsTable from 'src/components/DetailsTable';
 import { V2beta1Experiment } from 'src/apisv2beta1/experiment';
@@ -62,7 +62,7 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
     };
   }
 
-  public render(): JSX.Element {
+  public render(): React.JSX.Element {
     const { run } = this.state;
     let runDetails: Array<KeyValue<string>> = [];
     let inputParameters: Array<KeyValue<string>> = [];
@@ -72,10 +72,11 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
         ['Description', run.description!],
         ['Created at', formatDateString(run.created_at)],
       ];
-      inputParameters = Object.entries(run.runtime_config?.parameters || []).map(param => [
-        param[0] || '',
-        param[1] || '',
-      ]);
+      inputParameters = Object.entries(run.runtime_config?.parameters || []).map(([key, value]) => {
+        const displayValue =
+          value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value);
+        return [key || '', displayValue];
+      });
       if (run.trigger) {
         triggerDetails = [
           ['Enabled', enabledDisplayStringV2(run.trigger, run.status!)],
@@ -127,6 +128,7 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
   }
 
   public componentDidMount(): Promise<void> {
+    this._isMounted = true;
     return this.load();
   }
 
@@ -136,7 +138,7 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
 
   public async load(): Promise<void> {
     this.clearBanner();
-    const recurringRunId = this.props.match.params[RouteParams.recurringRunId];
+    const recurringRunId = this.props.params[RouteParams.recurringRunId] ?? '';
 
     let run: V2beta1RecurringRun;
     try {
@@ -187,9 +189,13 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
     toolbarActions[ButtonKeys.DISABLE_RECURRING_RUN].disabled =
       run.status !== V2beta1RecurringRunStatus.ENABLED;
 
+    if (!this._isMounted) {
+      return;
+    }
+
     this.props.updateToolbar({ actions: toolbarActions, breadcrumbs, pageTitle });
 
-    this.setState({ run });
+    this.setStateSafe({ run });
   }
 
   private _deleteCallback(_: string[], success: boolean): void {
@@ -198,7 +204,7 @@ class RecurringRunDetailsV2 extends Page<{}, RecurringRunConfigState> {
       const previousPage = breadcrumbs.length
         ? breadcrumbs[breadcrumbs.length - 1].href
         : RoutePage.EXPERIMENTS;
-      this.props.history.push(previousPage);
+      this.props.navigate(previousPage);
     }
   }
 }

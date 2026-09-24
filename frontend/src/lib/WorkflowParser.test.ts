@@ -19,47 +19,38 @@ import { NodePhase } from '../lib/StatusUtils';
 import { Constants } from './Constants';
 import WorkflowParser, { StorageService } from './WorkflowParser';
 import { Workflow } from 'third_party/argo-ui/argo_template';
-import { Execution } from 'src/third_party/mlmd/generated/ml_metadata/proto/metadata_store_pb';
-import { KfpExecutionProperties } from 'src/mlmd/MlmdUtils';
-import { stringValue } from 'src/mlmd/TestUtils';
 
 describe('WorkflowParser', () => {
   describe('createRuntimeGraph', () => {
     it('handles an undefined workflow', () => {
-      const g = WorkflowParser.createRuntimeGraph(undefined as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(undefined as any);
       expect(g.nodes()).toEqual([]);
       expect(g.edges()).toEqual([]);
     });
 
     it('handles an empty workflow', () => {
-      const g = WorkflowParser.createRuntimeGraph({} as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph({} as any);
       expect(g.nodes()).toEqual([]);
       expect(g.edges()).toEqual([]);
     });
 
     it('handles a workflow without nodes', () => {
-      const g = WorkflowParser.createRuntimeGraph({ status: {} } as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph({ status: {} } as any);
       expect(g.nodes()).toEqual([]);
       expect(g.edges()).toEqual([]);
     });
 
     it('handles a workflow without a metadata', () => {
-      const g = WorkflowParser.createRuntimeGraph(
-        { status: { nodes: [{ key: 'value' }] } } as any,
-        undefined,
-      );
+      const g = WorkflowParser.createRuntimeGraph({ status: { nodes: [{ key: 'value' }] } } as any);
       expect(g.nodes()).toEqual([]);
       expect(g.edges()).toEqual([]);
     });
 
     it('handles a workflow without a name', () => {
-      const g = WorkflowParser.createRuntimeGraph(
-        {
-          metadata: {},
-          status: { nodes: [{ key: 'value' }] },
-        } as any,
-        undefined,
-      );
+      const g = WorkflowParser.createRuntimeGraph({
+        metadata: {},
+        status: { nodes: [{ key: 'value' }] },
+      } as any);
       expect(g.nodes()).toEqual([]);
       expect(g.edges()).toEqual([]);
     });
@@ -87,7 +78,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual(['node1', 'node2']);
       expect(g.edges()).toEqual([]);
     });
@@ -122,66 +113,9 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual(['node1', 'node2']);
       expect(g.edges()).toEqual([{ v: 'node1', w: 'node2' }]);
-    });
-
-    it('creates graph with cached icon read from MLMD execution', () => {
-      const workflow = {
-        metadata: {
-          name: 'virtualRoot',
-          annotations: { ['pipelines.kubeflow.org/v2_pipeline']: 'true' },
-        },
-        status: {
-          nodes: {
-            node1: {
-              displayName: 'node1',
-              id: 'node1',
-              name: 'node1',
-              phase: 'Succeeded',
-              type: 'Pod',
-            },
-            virtualRoot: {
-              displayName: 'virtualRoot',
-              id: 'virtualRoot',
-              name: 'virtualRoot',
-              outboundNodes: ['node1'],
-              phase: 'Succeeded',
-              type: 'Steps',
-            },
-          },
-        },
-      };
-      const execution = new Execution().setLastKnownState(Execution.State.CACHED);
-      execution.getCustomPropertiesMap().set(KfpExecutionProperties.POD_NAME, stringValue('node1'));
-
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, [execution]);
-      expect(g.nodes()).toEqual(['node1']);
-      expect(g.node('node1')['icon']).toMatchInlineSnapshot(`
-        <WithStyles(Tooltip)
-          title={
-            <div>
-              <div>
-                Execution was skipped and outputs were taken from cache
-              </div>
-            </div>
-          }
-        >
-          <div>
-            <StatusCached
-              data-testid="node-status-sign"
-              style={
-                Object {
-                  "color": "#34a853",
-                  "height": 18,
-                  "width": 18,
-                }
-              }
-            />
-          </div>
-        </WithStyles(Tooltip)>
-      `);
     });
 
     it('creates a graph with placeholder nodes for steps that are not finished', () => {
@@ -221,7 +155,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual([
         'finishedNode',
         'pendingNode',
@@ -264,7 +198,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
 
       const runningNode = g.node('runningNode');
       expect(runningNode.height).toEqual(Constants.NODE_HEIGHT);
@@ -302,11 +236,11 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
 
       g.edges()
-        .map(edgeInfo => g.edge(edgeInfo))
-        .forEach(edge => {
+        .map((edgeInfo) => g.edge(edgeInfo))
+        .forEach((edge) => {
           if (edge.isPlaceholder) {
             expect(edge.color).toEqual(color.weak);
           } else {
@@ -344,7 +278,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual(['node1', 'node3']);
       expect(g.edges()).toEqual([{ v: 'node1', w: 'node3' }]);
     });
@@ -378,7 +312,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual(['node1', 'node3']);
       expect(g.edges()).toEqual([{ v: 'node1', w: 'node3' }]);
     });
@@ -405,7 +339,7 @@ describe('WorkflowParser', () => {
           },
         },
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow as any);
       expect(g.nodes()).toEqual(['exitNode', 'node1']);
       expect(g.node('node1').label).toEqual('node1');
       expect(g.node('exitNode').label).toEqual('onExit - clean');
@@ -445,14 +379,14 @@ describe('WorkflowParser', () => {
       workflow1.spec.templates[0].metadata.annotations = {
         'pipelines.kubeflow.org/task_display_name': 'Customized name',
       };
-      const g = WorkflowParser.createRuntimeGraph(workflow1 as any, undefined);
+      const g = WorkflowParser.createRuntimeGraph(workflow1 as any);
       expect(g.node('node1').label).toEqual('Customized name');
 
       const workflow2 = singleNodeWorkflow();
       workflow2.spec.templates[0].metadata.annotations = {
         'pipelines.kubeflow.org/component_spec': '{"name":"Component Name"}',
       };
-      const g2 = WorkflowParser.createRuntimeGraph(workflow2 as any, undefined);
+      const g2 = WorkflowParser.createRuntimeGraph(workflow2 as any);
       expect(g2.node('node1').label).toEqual('Component Name');
     });
   });
@@ -1456,13 +1390,13 @@ describe('WorkflowParser', () => {
       expect(WorkflowParser.getWorkflowError({ status: {} } as any)).toEqual('');
     });
 
-    [NodePhase.PENDING, NodePhase.RUNNING, NodePhase.SKIPPED, NodePhase.SUCCEEDED].map(phase => {
+    [NodePhase.PENDING, NodePhase.RUNNING, NodePhase.SKIPPED, NodePhase.SUCCEEDED].map((phase) => {
       it('returns empty string for workflow with no message and phase: ' + phase, () => {
         expect(WorkflowParser.getWorkflowError({ status: { phase } } as any)).toEqual('');
       });
     });
 
-    [NodePhase.PENDING, NodePhase.RUNNING, NodePhase.SKIPPED, NodePhase.SUCCEEDED].map(phase => {
+    [NodePhase.PENDING, NodePhase.RUNNING, NodePhase.SKIPPED, NodePhase.SUCCEEDED].map((phase) => {
       it('returns empty string for workflow with a message and phase: ' + phase, () => {
         expect(
           WorkflowParser.getWorkflowError({ status: { message: 'woops!', phase } } as any),
@@ -1470,7 +1404,7 @@ describe('WorkflowParser', () => {
       });
     });
 
-    [NodePhase.ERROR, NodePhase.FAILED].map(phase => {
+    [NodePhase.ERROR, NodePhase.FAILED].map((phase) => {
       it('returns no error for workflow with no message and phase: ' + phase, () => {
         expect(
           WorkflowParser.getWorkflowError({
@@ -1482,7 +1416,7 @@ describe('WorkflowParser', () => {
       });
     });
 
-    [NodePhase.ERROR, NodePhase.FAILED].map(phase => {
+    [NodePhase.ERROR, NodePhase.FAILED].map((phase) => {
       it('returns message string for workflow with a message and phase: ' + phase, () => {
         expect(
           WorkflowParser.getWorkflowError({

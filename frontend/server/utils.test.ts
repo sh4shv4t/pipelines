@@ -12,28 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import { PassThrough } from 'stream';
-import { PreviewStream, findFileOnPodVolume, resolveFilePathOnVolume } from './utils';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  PreviewStream,
+  findFileOnPodVolume,
+  openFileWithinRoot,
+  parseError,
+  resolveFilePathOnVolume,
+} from './utils.js';
 
 describe('utils', () => {
   describe('PreviewStream', () => {
-    it('should stream first 5 bytes', done => {
+    it('should stream first 5 bytes', async () => {
       const peek = 5;
       const input = 'some string that will be truncated.';
       const source = new PassThrough();
       const preview = new PreviewStream({ peek });
-      const dst = source.pipe(preview).on('end', done);
-      source.end(input);
-      dst.once('readable', () => expect(dst.read().toString()).toBe(input.slice(0, peek)));
+      await new Promise<void>((resolve) => {
+        const dst = source.pipe(preview).on('end', resolve);
+        source.end(input);
+        dst.once('readable', () => expect(dst.read().toString()).toBe(input.slice(0, peek)));
+      });
     });
 
-    it('should stream everything if peek==0', done => {
+    it('should stream everything if peek==0', async () => {
       const peek = 0;
       const input = 'some string that will be truncated.';
       const source = new PassThrough();
       const preview = new PreviewStream({ peek });
-      const dst = source.pipe(preview).on('end', done);
-      source.end(input);
-      dst.once('readable', () => expect(dst.read().toString()).toBe(input));
+      await new Promise<void>((resolve) => {
+        const dst = source.pipe(preview).on('end', resolve);
+        source.end(input);
+        dst.once('readable', () => expect(dst.read().toString()).toBe(input));
+      });
     });
   });
 
@@ -175,6 +188,15 @@ describe('utils', () => {
       expect(path).toEqual(['/data/a/b/c', undefined]);
     });
 
+    it('resolves the volume root without volumeMountSubPath', () => {
+      const path = resolveFilePathOnVolume({
+        filePathInVolume: '',
+        volumeMountPath: '/data',
+        volumeMountSubPath: undefined,
+      });
+      expect(path).toEqual(['/data', undefined]);
+    });
+
     it('with volumeMountSubPath', () => {
       const path = resolveFilePathOnVolume({
         volumeMountPath: '/data',
@@ -203,6 +225,157 @@ describe('utils', () => {
         '',
         'File a/b/c not mounted, expecting the file to be inside volume mount subpath other',
       ]);
+    });
+
+    it('rejects parent directory traversal', () => {
+      const path = resolveFilePathOnVolume({
+        filePathInVolume: '../secret',
+        volumeMountPath: '/data',
+        volumeMountSubPath: undefined,
+      });
+      expect(path).toEqual(['', 'file path ../secret must not contain parent directory segments']);
+    });
+
+    it('rejects absolute paths', () => {
+      const path = resolveFilePathOnVolume({
+        filePathInVolume: '/etc/passwd',
+        volumeMountPath: '/data',
+        volumeMountSubPath: undefined,
+      });
+      expect(path).toEqual(['', 'file path /etc/passwd must be relative']);
+    });
+
+    it('requires subPath to match a full path segment', () => {
+      const path = resolveFilePathOnVolume({
+        volumeMountPath: '/data',
+        filePathInVolume: 'ab/c',
+        volumeMountSubPath: 'a',
+      });
+      expect(path).toEqual([
+        '',
+        'File ab/c not mounted, expecting the file to be inside volume mount subpath a',
+      ]);
+    });
+  });
+
+  describe('openFileWithinRoot', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function makeTempDirectory(): string {
+      return fs.mkdtempSync(path.join(os.tmpdir(), 'kfp-volume-test-'));
+    }
+
+    it.each(['final', 'intermediate'])('rejects an outside %s symlink', async (symlinkKind) => {
+      const rootPath = makeTempDirectory();
+      const outsidePath = makeTempDirectory();
+      const outsideFilePath = path.join(outsidePath, 'secret');
+      fs.writeFileSync(outsideFilePath, 'outside secret');
+      const requestedFilePath =
+        symlinkKind === 'final'
+          ? path.join(rootPath, 'leak')
+          : path.join(rootPath, 'escape', 'secret');
+      fs.symlinkSync(
+        symlinkKind === 'final' ? outsideFilePath : outsidePath,
+        symlinkKind === 'final' ? requestedFilePath : path.join(rootPath, 'escape'),
+      );
+
+      try {
+        const [fileHandle, error] = await openFileWithinRoot(requestedFilePath, rootPath);
+        expect(fileHandle).toBeUndefined();
+        expect(error).toMatchObject({ pathEscaped: true });
+      } finally {
+        fs.rmSync(rootPath, { recursive: true, force: true });
+        fs.rmSync(outsidePath, { recursive: true, force: true });
+      }
+    });
+
+    it('opens an in-root symlink through the validated file handle', async () => {
+      const rootPath = makeTempDirectory();
+      const targetPath = path.join(rootPath, 'content');
+      const linkPath = path.join(rootPath, 'link');
+      fs.writeFileSync(targetPath, 'inside content');
+      fs.symlinkSync(targetPath, linkPath);
+
+      try {
+        const [fileHandle, error] = await openFileWithinRoot(linkPath, rootPath);
+        expect(error).toBeUndefined();
+        expect(await fileHandle?.readFile({ encoding: 'utf8' })).toBe('inside content');
+        await fileHandle?.close();
+      } finally {
+        fs.rmSync(rootPath, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an opened descriptor outside the root even when the requested path is inside', async () => {
+      const rootPath = makeTempDirectory();
+      const outsidePath = makeTempDirectory();
+      const requestedFilePath = path.join(rootPath, 'artifact');
+      const outsideFilePath = path.join(outsidePath, 'secret');
+      fs.writeFileSync(requestedFilePath, 'inside content');
+      fs.writeFileSync(outsideFilePath, 'outside secret');
+
+      const outsideFileHandle = await fs.promises.open(outsideFilePath, fs.constants.O_RDONLY);
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+      vi.spyOn(fs.promises, 'open').mockResolvedValueOnce(outsideFileHandle);
+      vi.spyOn(fs.promises, 'readlink').mockResolvedValueOnce(outsideFilePath);
+
+      try {
+        const [fileHandle, error] = await openFileWithinRoot(requestedFilePath, rootPath);
+        expect(fileHandle).toBeUndefined();
+        expect(error).toMatchObject({ pathEscaped: true });
+      } finally {
+        await outsideFileHandle.close().catch(() => undefined);
+        fs.rmSync(rootPath, { recursive: true, force: true });
+        fs.rmSync(outsidePath, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('parseError', () => {
+    it('parses nested non-cloneable KFP error responses from text without consuming the body twice', async () => {
+      let consumed = false;
+      const response = {
+        async json() {
+          consumed = true;
+          throw new Error('json parse failed');
+        },
+        async text() {
+          if (consumed) {
+            throw new Error('body already consumed');
+          }
+          consumed = true;
+          return JSON.stringify({ error: 'backend exploded', details: { status: 500 } });
+        },
+      };
+
+      await expect(parseError({ response })).resolves.toEqual({
+        message: 'backend exploded',
+        additionalInfo: { status: 500 },
+      });
+    });
+
+    it('returns plain text for direct non-cloneable KFP responses', async () => {
+      let consumed = false;
+      const response = {
+        async json() {
+          consumed = true;
+          throw new Error('json parse failed');
+        },
+        async text() {
+          if (consumed) {
+            throw new Error('body already consumed');
+          }
+          consumed = true;
+          return 'plain text failure';
+        },
+      };
+
+      await expect(parseError(response)).resolves.toEqual({
+        message: 'plain text failure',
+        additionalInfo: 'plain text failure',
+      });
     });
   });
 });

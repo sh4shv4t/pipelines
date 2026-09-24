@@ -18,19 +18,19 @@ package util
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
-	workflowapi "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
-	argoclient "github.com/argoproj/argo-workflows/v3/pkg/client/clientset/versioned"
-	argoclientwf "github.com/argoproj/argo-workflows/v3/pkg/client/clientset/versioned/typed/workflow/v1alpha1"
-	argoinformer "github.com/argoproj/argo-workflows/v3/pkg/client/informers/externalversions"
-	"github.com/argoproj/argo-workflows/v3/pkg/client/informers/externalversions/workflow/v1alpha1"
-	"github.com/argoproj/argo-workflows/v3/workflow/common"
-	"github.com/argoproj/argo-workflows/v3/workflow/packer"
-	"github.com/argoproj/argo-workflows/v3/workflow/validate"
+	workflowapi "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
+	argoclient "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned"
+	argoclientwf "github.com/argoproj/argo-workflows/v4/pkg/client/clientset/versioned/typed/workflow/v1alpha1"
+	argoinformer "github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions"
+	"github.com/argoproj/argo-workflows/v4/pkg/client/informers/externalversions/workflow/v1alpha1"
+	argologging "github.com/argoproj/argo-workflows/v4/util/logging"
+	"github.com/argoproj/argo-workflows/v4/workflow/common"
+	"github.com/argoproj/argo-workflows/v4/workflow/packer"
+	"github.com/argoproj/argo-workflows/v4/workflow/validate"
 	"github.com/golang/glog"
 	api "github.com/kubeflow/pipelines/backend/api/v1beta1/go_client"
 	"github.com/kubeflow/pipelines/backend/src/agent/persistence/client/artifactclient"
@@ -39,6 +39,7 @@ import (
 	swfapi "github.com/kubeflow/pipelines/backend/src/crd/pkg/apis/scheduledworkflow/v1beta1"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -52,6 +53,8 @@ import (
 type Workflow struct {
 	*workflowapi.Workflow
 }
+
+var argoContext = argologging.NewSlogLogger(argologging.Info, argologging.Text).NewBackgroundContext()
 
 func NewWorkflowFromBytes(bytes []byte) (*Workflow, error) {
 	var workflow workflowapi.Workflow
@@ -477,8 +480,6 @@ func (w *Workflow) StartedAtTime() metav1.Time {
 
 const (
 	metricsArtifactName = "mlpipeline-metrics"
-	// More than 50 metrics is not scalable with current UI design.
-	maxMetricsCountLimit = 50
 )
 
 func (w *Workflow) CollectionMetrics(readArtifact func(*artifactclient.ReadArtifactRequest) (*artifactclient.ReadArtifactResponse, error)) ([]*api.RunMetric, []error) {
@@ -511,63 +512,24 @@ func collectNodeMetricsOrNil(runID string, nodeStatus *workflowapi.NodeStatus, r
 	if !nodeStatus.Completed() {
 		return nil, nil
 	}
-	metricsJSON, err := readNodeMetricsJSONOrEmpty(runID, nodeStatus, readArtifact, &wf)
-	if err != nil || metricsJSON == "" {
+	metrics, err := readNodeMetricsOrNil(runID, nodeStatus, readArtifact, &wf)
+	if err != nil || metrics == nil {
 		return nil, err
 	}
 
 	retrievedNodeID := nodeStatus.ID
-	// Proto json lib requires a proto message before unmarshal data from JSON. We use
-	// ReportRunMetricsRequest as a workaround to hold user's metrics, which is a superset of what
-	// user can provide.
-	reportMetricsRequest := new(api.ReportRunMetricsRequest)
-	transformedJSON, err := transformJSONForBackwardCompatibility(metricsJSON)
-	if err != nil {
-		fmt.Printf("Failed to transform JSON: %v\n", err)
-		return nil, err
-	}
-
-	err = protojson.Unmarshal([]byte(transformedJSON), reportMetricsRequest)
-	if err != nil {
-		// User writes invalid metrics JSON.
-		// TODO(#1426): report the error back to api server to notify user
-		log.WithFields(log.Fields{
-			"run":         runID,
-			"node":        retrievedNodeID,
-			"raw_content": metricsJSON,
-			"error":       err.Error(),
-		}).Warning("Failed to unmarshal metrics file.")
-		return nil, NewCustomError(err, CUSTOM_CODE_PERMANENT,
-			"failed to unmarshal metrics file from (%s, %s).", runID, retrievedNodeID)
-	}
-	if reportMetricsRequest.GetMetrics() == nil {
-		return nil, nil
-	}
-	for _, metric := range reportMetricsRequest.GetMetrics() {
+	for _, metric := range metrics {
 		// User metrics just have name and value but no NodeId.
 		metric.NodeId = retrievedNodeID
 	}
-	return reportMetricsRequest.GetMetrics(), nil
+	return metrics, nil
 }
 
-// Previously number_value for RunMetrics in backend/api/v1beta1/run.proto
-// allowed camelCase field values in JSON, to be consistent with the
-// rest of the API (as well as with KFP api docs); this value was switched
-// to support snake case. This function will convert old values to the
-// newer snakecase so we can continue to support camelcase Metric Values for
-// backwards compatibility for the end user.
-func transformJSONForBackwardCompatibility(jsonStr string) (string, error) {
-	replacer := strings.NewReplacer(
-		`"numberValue":`, `"number_value":`,
-	)
-	return replacer.Replace(jsonStr), nil
-}
-
-func readNodeMetricsJSONOrEmpty(runID string, nodeStatus *workflowapi.NodeStatus,
+func readNodeMetricsOrNil(runID string, nodeStatus *workflowapi.NodeStatus,
 	readArtifact func(*artifactclient.ReadArtifactRequest) (*artifactclient.ReadArtifactResponse, error), wf *workflowapi.Workflow,
-) (string, error) {
+) ([]*api.RunMetric, error) {
 	if nodeStatus.Outputs == nil || nodeStatus.Outputs.Artifacts == nil {
-		return "", nil // No output artifacts, skip the reporting
+		return nil, nil // No output artifacts, skip the reporting
 	}
 
 	var foundMetricsArtifact bool = false
@@ -577,37 +539,36 @@ func readNodeMetricsJSONOrEmpty(runID string, nodeStatus *workflowapi.NodeStatus
 		}
 	}
 	if !foundMetricsArtifact {
-		return "", nil // No metrics artifact, skip the reporting
+		return nil, nil // No metrics artifact, skip the reporting
 	}
 
 	artifactRequest := &artifactclient.ReadArtifactRequest{
-		RunID:        runID,
-		NodeID:       nodeStatus.ID,
-		ArtifactName: metricsArtifactName,
+		RunID:            runID,
+		NodeID:           nodeStatus.ID,
+		ArtifactName:     metricsArtifactName,
+		MaxResponseBytes: ArchiveWireResponseBudget(GetMaxMetricsFileBytes()),
 	}
 	artifactResponse, err := readArtifact(artifactRequest)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if artifactResponse == nil || artifactResponse.Data == nil || len(artifactResponse.Data) == 0 {
 		// If artifact is not found or empty content, skip the reporting.
-		return "", nil
+		return nil, nil
 	}
-	archivedFiles, err := ExtractTgz(string(artifactResponse.Data))
+
+	var metrics []*api.RunMetric
+	err = readSingleFileFromTgz(artifactResponse.Data, GetMaxMetricsFileBytes(), func(reader io.Reader) error {
+		var decodeError error
+		metrics, decodeError = decodeRunMetrics(reader)
+		return decodeError
+	})
 	if err != nil {
-		// Invalid tgz file. This should never happen unless there is a bug in the system and
-		// it is a unrecoverable error.
-		return "", NewCustomError(err, CUSTOM_CODE_PERMANENT,
-			"Unable to extract metrics tgz file read from (%+v): %v", artifactRequest, err)
+		// Contract violations and malformed metrics artifacts are permanent for this completed node.
+		return nil, NewCustomError(err, CUSTOM_CODE_PERMANENT,
+			"Unable to read metrics tgz file from (%+v): %v", artifactRequest, err)
 	}
-	// There needs to be exactly one metrics file in the artifact archive. We load that file.
-	if len(archivedFiles) == 1 {
-		for _, value := range archivedFiles {
-			return value, nil
-		}
-	}
-	return "", NewCustomErrorf(CUSTOM_CODE_PERMANENT,
-		"There needs to be exactly one metrics file in the artifact archive, but zero or multiple files were found.")
+	return metrics, nil
 }
 
 func (w *Workflow) HasMetrics() bool {
@@ -673,6 +634,50 @@ func (w *Workflow) SetLabelsToAllTemplates(key string, value string) {
 	}
 }
 
+// UpsertRuntimeEnvVars adds or replaces env vars on workflow containers
+// matching the specified runtime roles using the AnnotationKeyRuntimeRole
+// annotation stamped by the compiler. Templates without the annotation are
+// skipped.
+func (w *Workflow) UpsertRuntimeEnvVars(envVars []corev1.EnvVar, roles ...ExecutionRuntimeRole) error {
+	if len(envVars) == 0 || len(w.Spec.Templates) == 0 {
+		return nil
+	}
+	roleSet := make(map[ExecutionRuntimeRole]bool, len(roles))
+	for _, r := range roles {
+		roleSet[r] = true
+	}
+	for i := range w.Spec.Templates {
+		tmpl := &w.Spec.Templates[i]
+		if tmpl.Container == nil {
+			continue
+		}
+
+		role := tmpl.Metadata.Annotations[AnnotationKeyRuntimeRole]
+		if role != "" && roleSet[ExecutionRuntimeRole(role)] {
+			tmpl.Container.Env = upsertEnvVars(tmpl.Container.Env, envVars)
+		}
+	}
+	return nil
+}
+
+// upsertEnvVars merges toAdd into existing: env vars whose name already
+// exists are replaced; new names are appended.
+func upsertEnvVars(existing []corev1.EnvVar, toAdd []corev1.EnvVar) []corev1.EnvVar {
+	nameIndex := make(map[string]int, len(existing))
+	for i, e := range existing {
+		nameIndex[e.Name] = i
+	}
+	for _, e := range toAdd {
+		if idx, ok := nameIndex[e.Name]; ok {
+			existing[idx] = e
+		} else {
+			nameIndex[e.Name] = len(existing)
+			existing = append(existing, e)
+		}
+	}
+	return existing
+}
+
 // SetOwnerReferences sets owner references on a Workflow.
 func (w *Workflow) SetOwnerReferences(schedule *swfapi.ScheduledWorkflow) {
 	w.OwnerReferences = []metav1.OwnerReference{
@@ -726,27 +731,62 @@ func (w *Workflow) SetCannonicalLabels(name string, nextScheduledEpoch int64, in
 	w.SetLabels(LabelKeyWorkflowIsOwnedByScheduledWorkflow, "true")
 }
 
-// FindObjectStoreArtifactKeyOrEmpty loops through all node running statuses and look up the first
-// S3 artifact with the specified nodeID and artifactName. Returns empty if nothing is found.
+// FindObjectStoreArtifactKeyOrEmpty looks up the first S3 artifact with the specified artifactName
+// on the specified node ID or derived Pod name. If the node has no outputs (e.g., a retry parent or step group node),
+// it recursively checks the node's children up to a bounded depth. This handles the hierarchy
+// introduced by templateDefaults.retryStrategy: StepGroup → Retry → Pod.
+// Returns empty string if nothing is found.
 func (w *Workflow) FindObjectStoreArtifactKeyOrEmpty(nodeName string, artifactName string) string {
 	if w.Status.Nodes == nil {
 		return ""
 	}
 	node, found := w.Status.Nodes[nodeName]
 	if !found {
+		for _, candidate := range w.Status.Nodes {
+			if RetrievePodName(*w.Workflow, candidate) == nodeName {
+				node = candidate
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
 		return ""
 	}
+	// maxDepth of 3 covers: StepGroup → Retry → Pod (deepest expected path).
+	return w.findArtifactKeyRecursive(node, artifactName, 3)
+}
+
+// findArtifactKeyRecursive searches the node and its children (up to maxDepth levels)
+// for an S3 artifact with the given name.
+func (w *Workflow) findArtifactKeyRecursive(node workflowapi.NodeStatus, artifactName string, maxDepth int) string {
+	if s3Key := findArtifactS3KeyFromNode(node, artifactName); s3Key != "" {
+		return s3Key
+	}
+	if maxDepth <= 0 {
+		return ""
+	}
+	for _, childNodeID := range node.Children {
+		if childNode, childFound := w.Status.Nodes[childNodeID]; childFound {
+			if s3Key := w.findArtifactKeyRecursive(childNode, artifactName, maxDepth-1); s3Key != "" {
+				return s3Key
+			}
+		}
+	}
+	return ""
+}
+
+// findArtifactS3KeyFromNode extracts the S3 key for a named artifact from a node's outputs.
+func findArtifactS3KeyFromNode(node workflowapi.NodeStatus, artifactName string) string {
 	if node.Outputs == nil || node.Outputs.Artifacts == nil {
 		return ""
 	}
-	var s3Key string
 	for _, artifact := range node.Outputs.Artifacts {
-		if artifact.Name != artifactName || artifact.S3 == nil || artifact.S3.Key == "" {
-			continue
+		if artifact.Name == artifactName && artifact.S3 != nil && artifact.S3.Key != "" {
+			return artifact.S3.Key
 		}
-		s3Key = artifact.S3.Key
 	}
-	return s3Key
+	return ""
 }
 
 // IsInFinalState whether the workflow is in a final state.
@@ -774,7 +814,7 @@ func (w *Workflow) IsV2Compatible() bool {
 }
 
 func (w *Workflow) Validate(lint, ignoreEntrypoint bool) error {
-	err := validate.ValidateWorkflow(nil, nil, w.Workflow, nil, validate.ValidateOpts{
+	err := validate.Workflow(ArgoContext(), nil, nil, w.Workflow, nil, validate.Opts{
 		Lint:                       lint,
 		IgnoreEntrypoint:           ignoreEntrypoint,
 		WorkflowTemplateValidation: false, // not used by kubeflow
@@ -784,7 +824,11 @@ func (w *Workflow) Validate(lint, ignoreEntrypoint bool) error {
 }
 
 func (w *Workflow) Decompress() error {
-	return packer.DecompressWorkflow(w.Workflow)
+	return packer.DecompressWorkflow(ArgoContext(), w.Workflow)
+}
+
+func ArgoContext() context.Context {
+	return argoContext
 }
 
 func (w *Workflow) CanRetry() error {
@@ -955,8 +999,8 @@ func (wfi *WorkflowInformer) Get(namespace string, name string) (ExecutionSpec, 
 	return NewWorkflow(workflow), false, nil
 }
 
-func (wfi *WorkflowInformer) List(labels *labels.Selector) (ExecutionSpecList, error) {
-	workflows, err := wfi.informer.Lister().List(*labels)
+func (wfi *WorkflowInformer) List(namespace string, labels *labels.Selector) (ExecutionSpecList, error) {
+	workflows, err := wfi.informer.Lister().Workflows(namespace).List(*labels)
 	if err != nil {
 		return nil, err
 	}

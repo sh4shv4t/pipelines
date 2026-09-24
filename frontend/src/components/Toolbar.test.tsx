@@ -15,14 +15,15 @@
  */
 
 import * as React from 'react';
-import { shallow } from 'enzyme';
-import { createBrowserHistory, createMemoryHistory } from 'history';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { vi } from 'vitest';
 import Toolbar, { ToolbarActionMap } from './Toolbar';
-import HelpIcon from '@material-ui/icons/Help';
-import InfoIcon from '@material-ui/icons/Info';
+import HelpIcon from '@mui/icons-material/Help';
+import InfoIcon from '@mui/icons-material/Info';
 
-const action1 = jest.fn();
-const action2 = jest.fn();
+const action1 = vi.fn();
+const action2 = vi.fn();
 const actions: ToolbarActionMap = {
   action1: {
     action: action1,
@@ -54,35 +55,65 @@ const breadcrumbs = [
   },
 ];
 
-const history = createBrowserHistory({});
+const navigate = vi.fn();
+
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 describe('Toolbar', () => {
-  beforeAll(() => {
-    history.push('/pipelines');
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(window.history, 'length', 'get').mockReturnValue(2);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('navigates Back through the native navigation function', () => {
+    renderWithRouter(
+      <Toolbar breadcrumbs={breadcrumbs} actions={{}} navigate={navigate} pageTitle='' />,
+    );
+    fireEvent.click(screen.getByTestId('ArrowBackIcon').closest('button')!);
+    expect(navigate).toHaveBeenCalledWith(-1);
+  });
+
+  it('disables Back when the browser has no previous entry', () => {
+    vi.spyOn(window.history, 'length', 'get').mockReturnValue(1);
+    renderWithRouter(
+      <Toolbar breadcrumbs={breadcrumbs} actions={{}} navigate={navigate} pageTitle='' />,
+    );
+    expect(screen.getByTestId('ArrowBackIcon').closest('button')).toBeDisabled();
   });
 
   it('renders nothing when there are no breadcrumbs or actions', () => {
-    const tree = shallow(<Toolbar breadcrumbs={[]} actions={{}} history={history} pageTitle='' />);
-    expect(tree).toMatchSnapshot();
+    const { container } = render(
+      <Toolbar breadcrumbs={[]} actions={{}} navigate={navigate} pageTitle='' />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders without breadcrumbs and a string page title', () => {
-    const tree = shallow(
-      <Toolbar breadcrumbs={[]} actions={actions} history={history} pageTitle='test page title' />,
-    );
-    expect(tree).toMatchSnapshot();
-  });
-
-  it('renders without breadcrumbs and a component page title', () => {
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={[]}
         actions={actions}
-        history={history}
+        navigate={navigate}
+        pageTitle='test page title'
+      />,
+    );
+    expect(asFragment()).toMatchSnapshot();
+  });
+
+  it('renders without breadcrumbs and a component page title', () => {
+    const { asFragment } = renderWithRouter(
+      <Toolbar
+        breadcrumbs={[]}
+        actions={actions}
+        navigate={navigate}
         pageTitle={<div id='myComponent'>test page title</div>}
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders without breadcrumbs and one action', () => {
@@ -96,64 +127,70 @@ describe('Toolbar', () => {
         tooltip: 'test tooltip',
       },
     };
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={[]}
         actions={singleAction}
-        history={history}
+        navigate={navigate}
         pageTitle='test page title'
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders without actions and one breadcrumb', () => {
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={[breadcrumbs[0]]}
         actions={{}}
-        history={history}
+        navigate={navigate}
         pageTitle='test page title'
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders without actions, one breadcrumb, and a page name', () => {
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={[breadcrumbs[0]]}
         actions={{}}
-        history={history}
+        navigate={navigate}
         pageTitle='test page title'
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders without breadcrumbs and two actions', () => {
-    const tree = shallow(
-      <Toolbar breadcrumbs={[]} actions={actions} history={history} pageTitle='test page title' />,
+    const { asFragment } = renderWithRouter(
+      <Toolbar
+        breadcrumbs={[]}
+        actions={actions}
+        navigate={navigate}
+        pageTitle='test page title'
+      />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('fires the right action function when button is clicked', () => {
-    const tree = shallow(
-      <Toolbar breadcrumbs={[]} actions={actions} history={history} pageTitle='test page title' />,
+    renderWithRouter(
+      <Toolbar
+        breadcrumbs={[]}
+        actions={actions}
+        navigate={navigate}
+        pageTitle='test page title'
+      />,
     );
-    tree
-      .find('BusyButton')
-      .at(0)
-      .simulate('click');
+    fireEvent.click(screen.getByRole('button', { name: 'test title' }));
     expect(action1).toHaveBeenCalled();
-    action1.mockClear();
   });
 
   it('renders outlined action buttons', () => {
     const outlinedActions = {
       action1: {
-        action: jest.fn(),
+        action: vi.fn(),
         id: 'test outlined id',
         outlined: true,
         title: 'test outlined title',
@@ -161,21 +198,21 @@ describe('Toolbar', () => {
       },
     };
 
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={breadcrumbs}
         actions={outlinedActions}
         pageTitle=''
-        history={history}
+        navigate={navigate}
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders primary action buttons', () => {
     const primaryActions = {
       action1: {
-        action: jest.fn(),
+        action: vi.fn(),
         id: 'test primary id',
         primary: true,
         title: 'test primary title',
@@ -183,16 +220,21 @@ describe('Toolbar', () => {
       },
     };
 
-    const tree = shallow(
-      <Toolbar breadcrumbs={breadcrumbs} actions={primaryActions} pageTitle='' history={history} />,
+    const { asFragment } = renderWithRouter(
+      <Toolbar
+        breadcrumbs={breadcrumbs}
+        actions={primaryActions}
+        pageTitle=''
+        navigate={navigate}
+      />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders primary action buttons without outline, even if outline is true', () => {
     const outlinedPrimaryActions = {
       action1: {
-        action: jest.fn(),
+        action: vi.fn(),
         id: 'test id',
         outlined: true,
         primary: true,
@@ -201,31 +243,21 @@ describe('Toolbar', () => {
       },
     };
 
-    const tree = shallow(
+    const { asFragment } = renderWithRouter(
       <Toolbar
         breadcrumbs={breadcrumbs}
         actions={outlinedPrimaryActions}
         pageTitle=''
-        history={history}
+        navigate={navigate}
       />,
     );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 
   it('renders with two breadcrumbs and two actions', () => {
-    const tree = shallow(
-      <Toolbar breadcrumbs={breadcrumbs} actions={actions} pageTitle='' history={history} />,
+    const { asFragment } = renderWithRouter(
+      <Toolbar breadcrumbs={breadcrumbs} actions={actions} pageTitle='' navigate={navigate} />,
     );
-    expect(tree).toMatchSnapshot();
-  });
-
-  it('disables the back button when there is no browser history', () => {
-    // This test uses createMemoryHistory because createBroweserHistory returns a singleton, and
-    // there is no way to clear its entries which this test requires.
-    const emptyHistory = createMemoryHistory();
-    const tree = shallow(
-      <Toolbar breadcrumbs={breadcrumbs} actions={actions} history={emptyHistory} pageTitle='' />,
-    );
-    expect(tree).toMatchSnapshot();
+    expect(asFragment()).toMatchSnapshot();
   });
 });

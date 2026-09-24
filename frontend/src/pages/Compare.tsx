@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import React, { useEffect, useState } from 'react';
-import { useQuery } from 'react-query';
+import { useEffect, useEffectEvent } from 'react';
+import { useQueries } from '@tanstack/react-query';
+import { CircularProgress } from '@mui/material';
 import { ApiRunDetail } from 'src/apis/run';
 import { QUERY_PARAMS } from 'src/components/Router';
+import { queryKeys } from 'src/hooks/queryKeys';
 import { FeatureKey, isFeatureEnabled } from 'src/features';
 import { Apis } from 'src/lib/Apis';
 import { errorToMessage } from 'src/lib/Utils';
@@ -41,54 +43,56 @@ export const METRICS_SECTION_NAME = 'Metrics';
 // This is a router to determine whether to show V1 or V2 compare page.
 export default function Compare(props: PageProps) {
   const { updateBanner } = props;
-  const [compareVersion, setCompareVersion] = useState<CompareVersion>(CompareVersion.Unknown);
   const queryParamRunIds = new URLParser(props).get(QUERY_PARAMS.runlist);
   const runIds = (queryParamRunIds && queryParamRunIds.split(',')) || [];
 
-  // Retrieves run details, set page version on success.
-  const { isLoading, isError, error, data } = useQuery<ApiRunDetail[], Error>(
-    ['run_details', { ids: runIds }],
-    () => Promise.all(runIds.map(async id => await Apis.runServiceApi.getRun(id))),
-    {
+  // Route each run independently so one rejection is not cached as successful aggregate data.
+  const runLoadQueries = useQueries({
+    queries: runIds.map((id) => ({
+      queryKey: queryKeys.runDetailForComparisonRouting(id),
+      queryFn: () => Apis.runServiceApi.getRun(id),
+      retry: 1,
+      retryDelay: 0,
       staleTime: Infinity,
-    },
+    })),
+  });
+
+  const isLoading = runLoadQueries.some((query) => query.isPending);
+  const successfulRuns = runLoadQueries.flatMap((query) =>
+    query.data ? [query.data as ApiRunDetail] : [],
   );
+  const failedRunError = runLoadQueries.find((query) => query.isError)?.error;
+  const compareVersion = isLoading
+    ? CompareVersion.Unknown
+    : runIds.length < 2 || runIds.length > 10
+      ? CompareVersion.InvalidRunCount
+      : !successfulRuns?.length
+        ? CompareVersion.Unknown
+        : (() => {
+            const v2runs = successfulRuns.filter(
+              (run) => 'pipeline_manifest' in (run.run?.pipeline_spec ?? {}),
+            );
+            if (v2runs.length === 0) {
+              return CompareVersion.V1;
+            }
+            if (v2runs.length === successfulRuns.length) {
+              return CompareVersion.V2;
+            }
+            return CompareVersion.Mixed;
+          })();
+  const routeCannotRenderPartialResults =
+    !!failedRunError &&
+    (!isFeatureEnabled(FeatureKey.V2_ALPHA) || compareVersion !== CompareVersion.V2);
 
-  useEffect(() => {
-    // Set the version based on the runs included.
-    if (data) {
-      if (data.length < 2 || data.length > 10) {
-        setCompareVersion(CompareVersion.InvalidRunCount);
-      } else {
-        const v2runs = data.filter(run =>
-          run.run?.pipeline_spec?.hasOwnProperty('pipeline_manifest'),
-        );
-        if (v2runs.length === 0) {
-          setCompareVersion(CompareVersion.V1);
-        } else if (v2runs.length === data.length) {
-          setCompareVersion(CompareVersion.V2);
-        } else {
-          setCompareVersion(CompareVersion.Mixed);
-        }
-      }
-    }
-  }, [data]);
-
-  useEffect(() => {
-    if (isLoading) {
-      return;
-    }
-
+  const updateComparisonBanner = useEffectEvent(async () => {
     // Update banner based on error, feature flag, run versions, and run count.
-    if (isError) {
-      (async function() {
-        const errorMessage = await errorToMessage(error);
-        updateBanner({
-          additionalInfo: errorMessage ? errorMessage : undefined,
-          message: `Error: failed loading ${runIds.length} runs. Click Details for more information.`,
-          mode: 'error',
-        });
-      })();
+    if (routeCannotRenderPartialResults) {
+      const errorMessage = await errorToMessage(failedRunError);
+      updateBanner({
+        additionalInfo: errorMessage ? errorMessage : undefined,
+        message: `Error: failed loading ${runIds.length} runs. Click Details for more information.`,
+        mode: 'error',
+      });
     } else if (
       isFeatureEnabled(FeatureKey.V2_ALPHA) &&
       compareVersion === CompareVersion.InvalidRunCount
@@ -109,13 +113,31 @@ export default function Compare(props: PageProps) {
           'Error: failed loading the Run Comparison page. Click Details for more information.',
         mode: 'error',
       });
-    } else if (isFeatureEnabled(FeatureKey.V2_ALPHA) && compareVersion !== CompareVersion.V1) {
+    } else if (
+      isFeatureEnabled(FeatureKey.V2_ALPHA) &&
+      compareVersion !== CompareVersion.V1 &&
+      compareVersion !== CompareVersion.V2
+    ) {
       // Clear the banner unless the V1 page is shown, as that page handles its own banner state.
       updateBanner({});
     }
-  }, [compareVersion, isError, error, isLoading, updateBanner, runIds.length]);
+  });
 
-  if (isError || isLoading) {
+  useEffect(() => {
+    if (!isLoading) {
+      void updateComparisonBanner();
+    }
+  }, [compareVersion, failedRunError, isLoading, runIds.length]);
+
+  if (isLoading) {
+    return (
+      <div style={{ textAlign: 'center', paddingTop: 40 }}>
+        <CircularProgress />
+      </div>
+    );
+  }
+
+  if (routeCannotRenderPartialResults) {
     return <></>;
   }
 

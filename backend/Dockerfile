@@ -13,8 +13,7 @@
 # limitations under the License.
 
 # 1. Build api server application
-FROM golang:1.24-bookworm AS builder
-RUN apt-get update && apt-get install -y cmake clang musl-dev openssl
+FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS builder
 WORKDIR /go/src/github.com/kubeflow/pipelines
 
 COPY ./go.mod ./
@@ -22,24 +21,43 @@ COPY ./go.sum ./
 COPY ./kubernetes_platform/go.mod ./kubernetes_platform/go.mod
 COPY ./api/go.mod ./api/go.mod
 
+# Fall back to fetching modules directly from source on any module proxy
+# error (the default comma separator only falls back on 404/410), so a
+# transient proxy.golang.org failure cannot fail the build.
+ENV GOPROXY=https://proxy.golang.org|direct
 RUN GO111MODULE=on go mod download
+RUN go list -mod=readonly -m -f '{{.Version}}' github.com/argoproj/argo-workflows/v4 > /tmp/argo-version
 
 COPY . .
 RUN GO111MODULE=on go build -o /bin/apiserver backend/src/apiserver/*.go
 
 # 2. Compile preloaded pipeline samples
-FROM python:3.11 AS compiler
-RUN apt-get update -y && apt-get install --no-install-recommends -y -q default-jdk python3-setuptools python3-dev jq
-RUN wget https://bootstrap.pypa.io/get-pip.py && python3 get-pip.py
-COPY backend/requirements.txt .
-RUN python3 -m pip install -r requirements.txt --no-cache-dir
+FROM python:3.11-slim AS compiler
+RUN apt-get update -y && apt-get install --no-install-recommends -y -q default-jdk python3-setuptools python3-dev jq wget curl protobuf-compiler make git
+RUN pip install uv
+
+WORKDIR /workspace
+COPY pyproject.toml uv.lock ./
+COPY sdk/python ./sdk/python
+COPY kubernetes_platform/python ./kubernetes_platform/python
+COPY api/Makefile ./api/Makefile
+COPY api/v2alpha1/python ./api/v2alpha1/python
+COPY api/v2alpha1/pipeline_spec.proto ./api/v2alpha1/pipeline_spec.proto
+COPY backend/api/v2beta1/python_http_client ./backend/api/v2beta1/python_http_client
+# Ensure clean checkouts include generated pipeline spec Python module.
+RUN make -C api fetch-protos && \
+    python3 /workspace/api/v2alpha1/python/generate_proto.py
+RUN uv sync --frozen --no-dev
+ENV PATH="/workspace/.venv/bin:$PATH"
 
 ARG TARGETARCH
 RUN echo "Building for architecture: ${TARGETARCH}"
 
-# Downloading Argo CLI so that the samples are validated
-ENV ARGO_VERSION=v3.7.3
-RUN curl -sL -H "Accept: application/octet-stream" \
+# Download the Argo CLI matching the runtime module so that the samples are
+# validated with the same release KFP builds against.
+COPY --from=builder /tmp/argo-version /tmp/argo-version
+RUN ARGO_VERSION="$(cat /tmp/argo-version)" && \
+    curl -fsSL -H "Accept: application/octet-stream" \
         https://github.com/argoproj/argo-workflows/releases/download/${ARGO_VERSION}/argo-linux-$TARGETARCH.gz \
     -o argo-linux-$TARGETARCH.gz && \
     gunzip argo-linux-$TARGETARCH.gz && \
@@ -52,14 +70,20 @@ COPY backend/src/apiserver/config/sample_config.json /samples/
 
 # Compiling the preloaded samples.
 # The default image is replaced with the GCR-hosted python image.
-RUN set -e; \
-    < /samples/sample_config.json jq ".pipelines[].file" --raw-output | while read pipeline_yaml; do \
+RUN apt-get update && apt-get install -y jq
+RUN set -ex; \
+    echo "Checking sample_config.json"; \
+    cat /samples/sample_config.json; \
+    jq ".pipelines[].file" --raw-output /samples/sample_config.json | while read pipeline_yaml; do \
     pipeline_py="${pipeline_yaml%.yaml}"; \
-    echo "Compiling: \"$pipeline_py\"" && python3 "$pipeline_py" && echo -n "Output: " && ls "$pipeline_py.yaml"; \
+    echo "Compiling: $pipeline_py"; \
+    python3 "$pipeline_py" || exit 1; \
+    echo "Checking output..."; \
+    ls "$pipeline_py.yaml" || exit 1; \
     done
 
 # 3. Start api web server
-FROM debian:stable
+FROM debian:stable-slim
 
 ARG COMMIT_SHA=unknown
 ENV COMMIT_SHA=${COMMIT_SHA}
@@ -70,7 +94,8 @@ ENV LOG_LEVEL=info
 WORKDIR /bin
 
 # Adding CA certificate so API server can download pipeline through URL and wget is used for liveness/readiness probe command
-RUN apt-get update && apt-get install -y ca-certificates wget
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend/src/apiserver/config/ /config
 COPY --from=builder /bin/apiserver /bin/apiserver

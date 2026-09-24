@@ -15,7 +15,6 @@
 package util
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +22,7 @@ import (
 )
 
 func TestMaxParameterBytes_Default(t *testing.T) {
+	t.Setenv(MaxParameterBytesEnvVar, "")
 	defaultMaxParameterBytes := 10000
 	assert.Equal(t, defaultMaxParameterBytes, GetMaxParameterBytes())
 }
@@ -82,7 +82,6 @@ func TestMaxParameterBytes_WithinLimitSucceeds(t *testing.T) {
 }
 
 func TestMaxParameterBytes_EnvVarParsing(t *testing.T) {
-	// Test the GetMaxParameterBytes() parsing logic
 	defaultMaxParameterBytes := 10000
 	testCases := []struct {
 		name        string
@@ -109,23 +108,35 @@ func TestMaxParameterBytes_EnvVarParsing(t *testing.T) {
 			envValue:    "-100",
 			expectValue: defaultMaxParameterBytes,
 		},
-		{
-			name:        "empty string keeps default",
-			envValue:    "",
-			expectValue: defaultMaxParameterBytes,
-		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Simulate the GetMaxParameterBytes() logic
-			result := defaultMaxParameterBytes
-			if tc.envValue != "" {
-				if val, err := strconv.Atoi(tc.envValue); err == nil && val > 0 {
-					result = val
-				}
-			}
-			assert.Equal(t, tc.expectValue, result)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(MaxParameterBytesEnvVar, testCase.envValue)
+			result := GetMaxParameterBytes()
+			assert.Equal(t, testCase.expectValue, result)
+		})
+	}
+}
+
+func TestGetMaxMetricsFileBytes(t *testing.T) {
+	const defaultMaxMetricsFileBytes int64 = 1 << 20
+	testCases := []struct {
+		name        string
+		envValue    string
+		expectValue int64
+	}{
+		{name: "default", expectValue: defaultMaxMetricsFileBytes},
+		{name: "valid positive integer", envValue: "2048", expectValue: 2048},
+		{name: "invalid string keeps default", envValue: "invalid", expectValue: defaultMaxMetricsFileBytes},
+		{name: "zero keeps default", envValue: "0", expectValue: defaultMaxMetricsFileBytes},
+		{name: "negative keeps default", envValue: "-1", expectValue: defaultMaxMetricsFileBytes},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(MaxMetricsFileBytesEnvVar, testCase.envValue)
+			assert.Equal(t, testCase.expectValue, GetMaxMetricsFileBytes())
 		})
 	}
 }

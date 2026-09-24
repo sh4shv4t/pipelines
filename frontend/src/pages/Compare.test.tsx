@@ -15,7 +15,6 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import * as React from 'react';
 import { CommonTestWrapper } from 'src/TestWrapper';
 import { Apis } from 'src/lib/Apis';
 import { PageProps } from './Page';
@@ -23,22 +22,26 @@ import { QUERY_PARAMS } from 'src/components/Router';
 import { ApiRunDetail } from 'src/apis/run';
 import Compare from './Compare';
 import * as features from 'src/features';
-import TestUtils, { testBestPractices } from 'src/TestUtils';
+import TestUtils, { flushPromisesInAct, testBestPractices } from 'src/TestUtils';
+import { useCallback, useState } from 'react';
+
+vi.mock('./CompareV1', () => ({ default: () => <div>V1 Comparison</div> }));
+vi.mock('./CompareV2', () => ({ default: () => <div>Scalar Metrics</div> }));
 
 testBestPractices();
 describe('Switch between v1 and v2 Run Comparison pages', () => {
   const MOCK_RUN_1_ID = 'mock-run-1-id';
   const MOCK_RUN_2_ID = 'mock-run-2-id';
   const MOCK_RUN_3_ID = 'mock-run-3-id';
-  const updateBannerSpy = jest.fn();
+  const updateBannerSpy = vi.fn();
 
   function generateProps(): PageProps {
     const pageProps: PageProps = {
-      history: {} as any,
+      navigate: vi.fn(),
       location: {
         search: `?${QUERY_PARAMS.runlist}=${MOCK_RUN_1_ID},${MOCK_RUN_2_ID},${MOCK_RUN_3_ID}`,
       } as any,
-      match: {} as any,
+      params: {},
       toolbarProps: { actions: {}, breadcrumbs: [], pageTitle: '' },
       updateBanner: updateBannerSpy,
       updateDialog: () => null,
@@ -49,7 +52,6 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
   }
 
   let runs: ApiRunDetail[] = [];
-
   function newMockRun(id?: string, v2?: boolean): ApiRunDetail {
     return {
       pipeline_runtime: {
@@ -63,17 +65,131 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
     };
   }
 
+  beforeEach(() => {
+    updateBannerSpy.mockClear();
+  });
+
+  it('shows a loading spinner while runs are being fetched', () => {
+    vi.spyOn(Apis.runServiceApi, 'getRun').mockReturnValue(new Promise(() => {}));
+
+    render(
+      <CommonTestWrapper>
+        <Compare {...generateProps()} />
+      </CommonTestWrapper>,
+    );
+
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  });
+
+  it('does not show a loading spinner after runs fail to load', async () => {
+    vi.spyOn(Apis.runServiceApi, 'getRun').mockRejectedValue(new Error('fail'));
+
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation(
+      (featureKey) => featureKey === features.FeatureKey.V2_ALPHA,
+    );
+
+    render(
+      <CommonTestWrapper>
+        <Compare {...generateProps()} />
+      </CommonTestWrapper>,
+    );
+
+    await waitFor(() => {
+      expect(updateBannerSpy).toHaveBeenCalledWith(expect.objectContaining({ mode: 'error' }));
+    });
+
+    expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it('updates the routing failure banner once when its owner rerenders', async () => {
+    vi.spyOn(Apis.runServiceApi, 'getRun').mockRejectedValue(new Error('route unavailable'));
+    vi.spyOn(features, 'isFeatureEnabled').mockReturnValue(true);
+    const bannerUpdates: object[] = [];
+
+    function StatefulOwner() {
+      const [bannerUpdateCount, setBannerUpdateCount] = useState(0);
+      const updateBanner = useCallback<PageProps['updateBanner']>((banner) => {
+        bannerUpdates.push(banner);
+        if (bannerUpdates.length < 10) {
+          setBannerUpdateCount((count) => count + 1);
+        }
+      }, []);
+      return (
+        <>
+          <span data-testid='banner-update-count'>{bannerUpdateCount}</span>
+          <Compare {...generateProps()} updateBanner={updateBanner} />
+        </>
+      );
+    }
+
+    render(
+      <CommonTestWrapper>
+        <StatefulOwner />
+      </CommonTestWrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('banner-update-count')).toHaveTextContent('1'));
+    await flushPromisesInAct();
+    expect(bannerUpdates).toHaveLength(1);
+  });
+
+  it('renders the V2 comparison when one requested run fails to load', async () => {
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
+    getRunSpy.mockImplementation((id: string) => {
+      if (id === MOCK_RUN_2_ID) {
+        return Promise.reject(new Error('run deleted'));
+      }
+      return Promise.resolve(newMockRun(id, true));
+    });
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation(
+      (featureKey) => featureKey === features.FeatureKey.V2_ALPHA,
+    );
+
+    render(
+      <CommonTestWrapper>
+        <Compare {...generateProps()} />
+      </CommonTestWrapper>,
+    );
+
+    await screen.findByText('Scalar Metrics');
+    expect(getRunSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries only the run whose routing request fails transiently', async () => {
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
+    let failedRunAttempts = 0;
+    getRunSpy.mockImplementation((id: string) => {
+      if (id === MOCK_RUN_2_ID && failedRunAttempts++ === 0) {
+        return Promise.reject(new Error('temporary outage'));
+      }
+      return Promise.resolve(newMockRun(id, true));
+    });
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation(
+      (featureKey) => featureKey === features.FeatureKey.V2_ALPHA,
+    );
+
+    render(
+      <CommonTestWrapper>
+        <Compare {...generateProps()} />
+      </CommonTestWrapper>,
+    );
+
+    await screen.findByText('Scalar Metrics');
+    expect(getRunSpy.mock.calls.filter(([id]) => id === MOCK_RUN_2_ID)).toHaveLength(2);
+    expect(getRunSpy).toHaveBeenCalledTimes(4);
+  });
+
   it('getRun is called with query param IDs', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, true),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -92,16 +208,16 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
   });
 
   it('Show v1 page if all runs are v1 and the v2 feature flag is enabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, false),
       newMockRun(MOCK_RUN_2_ID, false),
       newMockRun(MOCK_RUN_3_ID, false),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -113,22 +229,22 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => expect(screen.queryByText('Scalar Metrics')).toBeNull());
   });
 
   it('Show mixed version runs page error if run versions are mixed between v1 and v2', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, false),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -140,7 +256,7 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() =>
       expect(updateBannerSpy).toHaveBeenLastCalledWith({
@@ -155,12 +271,12 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
   });
 
   it('Show invalid run count page error if there are less than two runs', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [newMockRun(MOCK_RUN_1_ID, true)];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -174,7 +290,7 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...props} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() =>
       expect(updateBannerSpy).toHaveBeenLastCalledWith({
@@ -188,7 +304,7 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
   });
 
   it('Show invalid run count page error if there are more than ten runs', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun('1', true),
       newMockRun('2', true),
@@ -202,10 +318,10 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
       newMockRun('10', true),
       newMockRun('11', true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -219,7 +335,7 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...props} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() =>
       expect(updateBannerSpy).toHaveBeenLastCalledWith({
@@ -233,34 +349,34 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
   });
 
   it('Show no error on v1 page if run versions are mixed between v1 and v2 and feature flag disabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, false),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn off.
-    jest.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
+    vi.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
 
     render(
       <CommonTestWrapper>
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => expect(screen.queryByText('Scalar Metrics')).toBeNull());
   });
 
   it('Show no error on v1 page if there are less than two runs and v2 feature flag disabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [newMockRun(MOCK_RUN_1_ID, true)];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn off.
-    jest.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
+    vi.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
 
     const props = generateProps();
     props.location.search = `?${QUERY_PARAMS.runlist}=${MOCK_RUN_1_ID}`;
@@ -269,22 +385,22 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...props} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => expect(screen.queryByText('Scalar Metrics')).toBeNull());
   });
 
   it('Show v2 page if all runs are v2 and the v2 feature flag is enabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, true),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }
@@ -296,70 +412,70 @@ describe('Switch between v1 and v2 Run Comparison pages', () => {
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => screen.getByText('Scalar Metrics'));
   });
 
   it('Show v1 page if some runs are v1 and the v2 feature flag is disabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, false),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn off.
-    jest.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
+    vi.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
 
     render(
       <CommonTestWrapper>
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => expect(screen.queryByText('Scalar Metrics')).toBeNull());
   });
 
   it('Show v1 page if all runs are v2 and the v2 feature flag is disabled', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, true),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation((id: string) => runs.find(r => r.run!.id === id));
+    getRunSpy.mockImplementation((id: string) => runs.find((r) => r.run!.id === id));
 
     // v2 feature is turn off.
-    jest.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
+    vi.spyOn(features, 'isFeatureEnabled').mockReturnValue(false);
 
     render(
       <CommonTestWrapper>
         <Compare {...generateProps()} />
       </CommonTestWrapper>,
     );
-    await TestUtils.flushPromises();
+    await flushPromisesInAct();
 
     await waitFor(() => expect(screen.queryByText('Scalar Metrics')).toBeNull());
   });
 
   it('Show page error on page when getRun request fails', async () => {
-    const getRunSpy = jest.spyOn(Apis.runServiceApi, 'getRun');
+    const getRunSpy = vi.spyOn(Apis.runServiceApi, 'getRun');
     runs = [
       newMockRun(MOCK_RUN_1_ID, true),
       newMockRun(MOCK_RUN_2_ID, true),
       newMockRun(MOCK_RUN_3_ID, true),
     ];
-    getRunSpy.mockImplementation(_ => {
+    getRunSpy.mockImplementation((_) => {
       throw {
         text: () => Promise.resolve('test error'),
       };
     });
 
     // v2 feature is turn on.
-    jest.spyOn(features, 'isFeatureEnabled').mockImplementation(featureKey => {
+    vi.spyOn(features, 'isFeatureEnabled').mockImplementation((featureKey) => {
       if (featureKey === features.FeatureKey.V2_ALPHA) {
         return true;
       }

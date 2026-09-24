@@ -36,6 +36,7 @@ type RunInterface interface {
 	Get(params *params.RunServiceGetRunParams) (*model.V2beta1Run, error)
 	List(params *params.RunServiceListRunsParams) ([]*model.V2beta1Run, int, string, error)
 	ListAll(params *params.RunServiceListRunsParams, maxResultSize int) ([]*model.V2beta1Run, error)
+	Retry(params *params.RunServiceRetryRunParams) error
 	Unarchive(params *params.RunServiceUnarchiveRunParams) error
 	Terminate(params *params.RunServiceTerminateRunParams) error
 }
@@ -98,8 +99,7 @@ func (c *RunClient) Create(parameters *params.RunServiceCreateRunParams) (*model
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	response, err := c.apiClient.RunService.RunServiceCreateRun(parameters, c.authInfoWriter)
+	response, err := c.apiClient.RunService.RunServiceCreateRunContext(ctx, parameters, c.authInfoWriter)
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceGetRunDefault); ok {
 			err = api_server.CreateErrorFromAPIStatus(defaultError.Payload.Message, defaultError.Payload.Code)
@@ -121,8 +121,7 @@ func (c *RunClient) Get(parameters *params.RunServiceGetRunParams) (*model.V2bet
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	response, err := c.apiClient.RunService.RunServiceGetRun(parameters, c.authInfoWriter)
+	response, err := c.apiClient.RunService.RunServiceGetRunContext(ctx, parameters, c.authInfoWriter)
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceGetRunDefault); ok {
 			err = api_server.CreateErrorFromAPIStatus(defaultError.Payload.Message, defaultError.Payload.Code)
@@ -144,8 +143,7 @@ func (c *RunClient) Archive(parameters *params.RunServiceArchiveRunParams) error
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	_, err := c.apiClient.RunService.RunServiceArchiveRun(parameters, c.authInfoWriter)
+	_, err := c.apiClient.RunService.RunServiceArchiveRunContext(ctx, parameters, c.authInfoWriter)
 
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceListRunsDefault); ok {
@@ -168,8 +166,7 @@ func (c *RunClient) Unarchive(parameters *params.RunServiceUnarchiveRunParams) e
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	_, err := c.apiClient.RunService.RunServiceUnarchiveRun(parameters, c.authInfoWriter)
+	_, err := c.apiClient.RunService.RunServiceUnarchiveRunContext(ctx, parameters, c.authInfoWriter)
 
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceListRunsDefault); ok {
@@ -192,8 +189,7 @@ func (c *RunClient) Delete(parameters *params.RunServiceDeleteRunParams) error {
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	_, err := c.apiClient.RunService.RunServiceDeleteRun(parameters, c.authInfoWriter)
+	_, err := c.apiClient.RunService.RunServiceDeleteRunContext(ctx, parameters, c.authInfoWriter)
 
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceListRunsDefault); ok {
@@ -217,8 +213,7 @@ func (c *RunClient) List(parameters *params.RunServiceListRunsParams) (
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	response, err := c.apiClient.RunService.RunServiceListRuns(parameters, c.authInfoWriter)
+	response, err := c.apiClient.RunService.RunServiceListRunsContext(ctx, parameters, c.authInfoWriter)
 
 	if err != nil {
 		if defaultError, ok := err.(*params.RunServiceListRunsDefault); ok {
@@ -265,13 +260,30 @@ func listAllForRun(client RunInterface, parameters *params.RunServiceListRunsPar
 	return allResults, nil
 }
 
+func (c *RunClient) Retry(parameters *params.RunServiceRetryRunParams) error {
+	ctx, cancel := context.WithTimeout(context.Background(), api_server.APIServerDefaultTimeout)
+	defer cancel()
+
+	_, err := c.apiClient.RunService.RunServiceRetryRunContext(ctx, parameters, c.authInfoWriter)
+	if err != nil {
+		if defaultError, ok := err.(*params.RunServiceRetryRunDefault); ok {
+			err = api_server.CreateErrorFromAPIStatus(defaultError.Payload.Message, defaultError.Payload.Code)
+		} else {
+			err = api_server.CreateErrorCouldNotRecoverAPIStatus(err)
+		}
+		return util.NewUserError(err,
+			fmt.Sprintf("Failed to retry run. Params: '%+v'", parameters),
+			fmt.Sprintf("Failed to retry run %v", parameters.RunID))
+	}
+	return nil
+}
+
 func (c *RunClient) Terminate(parameters *params.RunServiceTerminateRunParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), api_server.APIServerDefaultTimeout)
 	defer cancel()
 
 	// Make service call
-	parameters.Context = ctx
-	_, err := c.apiClient.RunService.RunServiceTerminateRun(parameters, c.authInfoWriter)
+	_, err := c.apiClient.RunService.RunServiceTerminateRunContext(ctx, parameters, c.authInfoWriter)
 	if err != nil {
 		return util.NewUserError(err,
 			fmt.Sprintf("Failed to terminate run. Params: %+v", parameters),

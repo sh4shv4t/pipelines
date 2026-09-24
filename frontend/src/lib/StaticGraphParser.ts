@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
+import type * as React from 'react';
 import * as dagre from 'dagre';
-import { Template, Workflow } from '../third_party/mlmd/argo_template';
+import { Template, Workflow } from '../third_party/argo/argo_template';
 import { color } from '../Css';
 import { Constants } from './Constants';
 import { logger } from './Utils';
 import { parseTaskDisplayName } from './ParserUtils';
+import type { DagreGraph, GraphNodeData, GraphNodeInput } from './GraphTypes';
 import { graphlib } from 'dagre';
 
 export type nodeType = 'container' | 'resource' | 'dag' | 'unknown';
 
 export interface KeyValue<T> extends Array<any> {
-  0?: string | JSX.Element;
+  0?: string | React.JSX.Element;
   1?: T;
 }
 
@@ -66,7 +68,7 @@ export function _populateInfoFromTemplate(
     info.args = template.container.args || [];
     info.command = template.container.command || [];
     info.image = template.container.image || '';
-    info.volumeMounts = (template.container.volumeMounts || []).map(v => [v.mountPath, v.name]);
+    info.volumeMounts = (template.container.volumeMounts || []).map((v) => [v.mountPath, v.name]);
   } else {
     info.nodeType = 'resource';
     if (template.resource && template.resource.action && template.resource.manifest) {
@@ -77,10 +79,10 @@ export function _populateInfoFromTemplate(
   }
 
   if (template.inputs) {
-    info.inputs = (template.inputs.parameters || []).map(p => [p.name, p.value || '']);
+    info.inputs = (template.inputs.parameters || []).map((p) => [p.name, p.value || '']);
   }
   if (template.outputs) {
-    info.outputs = (template.outputs.parameters || []).map(p => {
+    info.outputs = (template.outputs.parameters || []).map((p) => {
       let value = '';
       if (p.value) {
         value = p.value;
@@ -115,7 +117,7 @@ export function _populateInfoFromTemplate(
  * where A and C are DAGs, the parentFullPath when rootTemplateId is C would be: /A/C
  */
 function buildDag(
-  graph: dagre.graphlib.Graph,
+  graph: DagreGraph,
   rootTemplateId: string,
   templates: Map<string, { nodeType: nodeType; template: Template }>,
   alreadyVisited: Map<string, string>,
@@ -132,7 +134,7 @@ function buildDag(
       throw new Error("Graph template or DAG object doesn't exist.");
     }
 
-    (template.dag.tasks || []).forEach(task => {
+    (template.dag.tasks || []).forEach((task) => {
       const nodeId = parentFullPath + '/' + task.name;
 
       // If the user specifies an exit handler, then the compiler will wrap the entire Pipeline
@@ -198,20 +200,20 @@ function buildDag(
         info,
         label: nodeLabel,
         width: Constants.NODE_WIDTH,
-      });
+      } satisfies GraphNodeInput);
 
       // DAG tasks can indicate dependencies which are graphically shown as parents with edges
       // pointing to their children (the task(s)).
       // TODO: The addition of the parent prefix to the dependency here is only valid if nodes only
       // ever directly depend on their siblings. This is true now but may change in the future, and
       // this will need to be updated.
-      (task.dependencies || []).forEach(dep => graph.setEdge(parentFullPath + '/' + dep, nodeId));
+      (task.dependencies || []).forEach((dep) => graph.setEdge(parentFullPath + '/' + dep, nodeId));
     });
   }
 }
 
-export function createGraph(workflow: Workflow): dagre.graphlib.Graph {
-  const graph = new dagre.graphlib.Graph();
+export function createGraph(workflow: Workflow): DagreGraph {
+  const graph = new dagre.graphlib.Graph<GraphNodeData>();
   graph.setGraph({});
   graph.setDefaultEdgeLabel(() => ({}));
 
@@ -229,7 +231,7 @@ export function createGraph(workflow: Workflow): dagre.graphlib.Graph {
 
   // Iterate through the workflow's templates to construct a map which will be used to traverse and
   // construct the graph
-  for (const template of workflowTemplates.filter(t => !!t && !!t.name)) {
+  for (const template of workflowTemplates.filter((t) => !!t && !!t.name)) {
     // Argo allows specifying a single global exit handler. We also highlight that node
     if (template.name === workflow.spec.onExit) {
       const info = new SelectedNodeInfo();
@@ -240,7 +242,7 @@ export function createGraph(workflow: Workflow): dagre.graphlib.Graph {
         info,
         label: 'onExit - ' + template.name,
         width: Constants.NODE_WIDTH,
-      });
+      } satisfies GraphNodeInput);
     }
 
     if (template.container) {
@@ -260,13 +262,13 @@ export function createGraph(workflow: Workflow): dagre.graphlib.Graph {
   // It is, however, possible for users to upload manually constructed Pipelines, and extremely
   // simple ones may have no steps or DAGs, just an entry point container.
   if (graph.nodeCount() === 0) {
-    const entryPointTemplate = workflowTemplates.find(t => t.name === workflow.spec.entrypoint);
+    const entryPointTemplate = workflowTemplates.find((t) => t.name === workflow.spec.entrypoint);
     if (entryPointTemplate) {
       graph.setNode(entryPointTemplate.name, {
         height: Constants.NODE_HEIGHT,
         label: entryPointTemplate.name,
         width: Constants.NODE_WIDTH,
-      });
+      } satisfies GraphNodeInput);
     }
   }
 
@@ -288,7 +290,7 @@ export function createGraph(workflow: Workflow): dagre.graphlib.Graph {
  *
  * @param graph The dagre graph object
  */
-export function transitiveReduction(graph: dagre.graphlib.Graph): dagre.graphlib.Graph | undefined {
+export function transitiveReduction(graph: DagreGraph): DagreGraph | undefined {
   // safeguard against too big graphs
   if (!graph || graph.edgeCount() > 1000 || graph.nodeCount() > 1000) {
     return undefined;
@@ -307,7 +309,7 @@ export function transitiveReduction(graph: dagre.graphlib.Graph): dagre.graphlib
     });
   };
 
-  result.nodes().forEach(node => {
+  result.nodes().forEach((node) => {
     visited = []; // clean this up before each new DFS
     // start a DFS from each successor of `node`
     result.successors(node)?.forEach((successor: any) => dfs_with_removal(successor, node));
@@ -315,16 +317,16 @@ export function transitiveReduction(graph: dagre.graphlib.Graph): dagre.graphlib
   return result;
 }
 
-export function compareGraphEdges(graph1: dagre.graphlib.Graph, graph2: dagre.graphlib.Graph) {
+export function compareGraphEdges(graph1: DagreGraph, graph2: DagreGraph) {
   return (
     graph1
       .edges()
-      .map(e => `${e.name}${e.v}${e.w}`)
+      .map((e) => `${e.name}${e.v}${e.w}`)
       .sort()
       .toString() ===
     graph2
       .edges()
-      .map(e => `${e.name}${e.v}${e.w}`)
+      .map((e) => `${e.name}${e.v}${e.w}`)
       .sort()
       .toString()
   );

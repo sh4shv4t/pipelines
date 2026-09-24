@@ -24,9 +24,10 @@ import (
 	"github.com/kubeflow/pipelines/backend/src/apiserver/common"
 	"github.com/kubeflow/pipelines/backend/src/common/util"
 
-	wfapi "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
+	wfapi "github.com/argoproj/argo-workflows/v4/pkg/apis/workflow/v1alpha1"
 	"github.com/kubeflow/pipelines/api/v2alpha1/go/pipelinespec"
 	"github.com/kubeflow/pipelines/backend/src/v2/compiler"
+	"github.com/kubeflow/pipelines/kubernetes_platform/go/kubernetesplatform"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -48,6 +49,29 @@ type Options struct {
 	DefaultWorkspace *k8score.PersistentVolumeClaimSpec
 	// TODO(Bobgy): add an option -- dev mode, ImagePullPolicy should only be Always in dev mode.
 	MLPipelineTLSEnabled bool
+	// Optional: admin-configured default runAsUser for customer containers.
+	// Nil means not set (feature disabled).
+	DefaultRunAsUser *int64
+	// Optional: admin-configured default runAsGroup for customer containers.
+	// Nil means not set (feature disabled).
+	DefaultRunAsGroup *int64
+	// Optional: admin-configured default runAsNonRoot for customer containers.
+	// Nil means not set (feature disabled).
+	DefaultRunAsNonRoot *bool
+	// Optional: administrator-configured default hostUsers for customer workload pods.
+	// Nil means not set (feature disabled). Setting this to false places the pod
+	// in a dedicated Linux user namespace: UID 0 inside the pod maps to an
+	// unprivileged host UID, so root processes in the container are not root on the host.
+	DefaultHostUsers *bool
+	// Optional: administrator-configured labels and annotations for driver pods.
+	// Nil means not set (feature disabled). The API server reads this from its own
+	// configuration and passes it in, so callers that compile outside the API server,
+	// such as the standalone compiler, simply leave it nil and get no extra metadata.
+	DriverPodConfig *common.DriverPodConfig
+	// Optional: base audience for projected service-account tokens used by runtime
+	// pods. Empty means DefaultTokenReviewAudience. The API server passes
+	// TOKEN_REVIEW_AUDIENCE so minted audiences match TokenReview.
+	TokenReviewAudience string
 }
 
 const (
@@ -115,6 +139,23 @@ func Compile(jobArg *pipelinespec.PipelineJob, kubernetesSpecArg *pipelinespec.S
 		}
 	}
 
+	// Resolve the workflow-level TTL strategy from the pipeline config.
+	// resource_ttl_on_completion is interpreted as seconds-after-completion so that Argo's
+	// TTL controller removes the Workflow object after the run finishes,
+	// regardless of success or failure.
+	var ttlStrategy *wfapi.TTLStrategy
+	if hasPipelineConfig {
+		ttlStrategy = buildTTLStrategy(kubernetesSpec.GetPipelineConfig())
+	}
+
+	// Resolve the workflow-level active deadline from the pipeline config.
+	// This sets a hard timeout after which Argo forcibly terminates the
+	// workflow, preventing stuck/zombie runs that never complete.
+	var activeDeadlineSeconds *int64
+	if kubernetesSpec != nil {
+		activeDeadlineSeconds = buildActiveDeadlineSeconds(kubernetesSpec.GetPipelineConfig())
+	}
+
 	// initialization
 	wf := &wfapi.Workflow{
 		TypeMeta: k8smeta.TypeMeta{
@@ -123,6 +164,18 @@ func Compile(jobArg *pipelinespec.PipelineJob, kubernetesSpecArg *pipelinespec.S
 		},
 		ObjectMeta: k8smeta.ObjectMeta{
 			GenerateName: retrieveLastValidString(spec.GetPipelineInfo().GetName()) + "-",
+			Annotations: map[string]string{
+				// Use Argo's shorter v1 pod names so long workflow names do not inherit
+				// internal template names like system-dag-driver into the pod hostname.
+				// Some runtime paths self-look up the current pod by its exact
+				// metadata.name via the Kubernetes API before reading pod
+				// annotations, for example the launcher retry-index fallback. If
+				// the hostname is truncated, that self-lookup can fail with "pod
+				// not found" even though the pod only talks to the API server.
+				// For debugging, the system template identity now lives in pod
+				// metadata instead of the pod name itself; see addSystemPodMetadata.
+				"workflows.argoproj.io/pod-name-format": "v1",
+			},
 			// Note, uncomment the following during development to view argo inputs/outputs in KFP UI.
 			// TODO(Bobgy): figure out what annotations we should use for v2 engine.
 			// For now, comment this annotation, so that in KFP UI, it shows argo input/output params/artifacts
@@ -144,33 +197,53 @@ func Compile(jobArg *pipelinespec.PipelineJob, kubernetesSpecArg *pipelinespec.S
 			Arguments: wfapi.Arguments{
 				Parameters: []wfapi.Parameter{},
 			},
-			ServiceAccountName:   common.GetStringConfigWithDefault(common.DefaultPipelineRunnerServiceAccountFlag, common.DefaultPipelineRunnerServiceAccount),
-			Entrypoint:           tmplEntrypoint,
-			VolumeClaimTemplates: volumeClaimTemplates,
+			ServiceAccountName:    common.GetStringConfigWithDefault(common.DefaultPipelineRunnerServiceAccountFlag, common.DefaultPipelineRunnerServiceAccount),
+			Entrypoint:            tmplEntrypoint,
+			VolumeClaimTemplates:  volumeClaimTemplates,
+			TTLStrategy:           ttlStrategy,
+			ActiveDeadlineSeconds: activeDeadlineSeconds,
 		},
 	}
 
+	// Set security defaults at the workflow level as a baseline for all pods.
+	// Argo Workflows is designed to run rootless:
+	// https://argo-workflows.readthedocs.io/en/latest/workflow-pod-security-context/
+	// Per-template security context is also applied for defense-in-depth.
+	runAsNonRoot := true
+	wf.Spec.SecurityContext = &k8score.PodSecurityContext{
+		RunAsNonRoot: &runAsNonRoot,
+		SeccompProfile: &k8score.SeccompProfile{
+			Type: k8score.SeccompProfileTypeRuntimeDefault,
+		},
+	}
 	runAsUser := GetPipelineRunAsUser()
 	if runAsUser != nil {
-		wf.Spec.SecurityContext = &k8score.PodSecurityContext{RunAsUser: runAsUser}
+		wf.Spec.SecurityContext.RunAsUser = runAsUser
 	}
 
 	c := &workflowCompiler{
 		wf:        wf,
 		templates: make(map[string]*wfapi.Template),
 		// TODO(chensun): release process and update the images.
-		launcherImage:   GetLauncherImage(),
-		launcherCommand: GetLauncherCommand(),
-		driverImage:     GetDriverImage(),
-		driverCommand:   GetDriverCommand(),
-		job:             job,
-		spec:            spec,
-		executors:       deploy.GetExecutors(),
+		launcherImage:     GetLauncherImage(),
+		launcherCommand:   GetLauncherCommand(),
+		driverImage:       GetDriverImage(),
+		driverCommand:     GetDriverCommand(),
+		job:               job,
+		spec:              spec,
+		executors:         deploy.GetExecutors(),
+		kubernetesConfigs: make(map[string]*kubernetesplatform.KubernetesExecutorConfig),
 	}
 	if opts != nil {
 		c.cacheDisabled = opts.CacheDisabled
 		c.defaultWorkspace = opts.DefaultWorkspace
 		c.mlPipelineTLSEnabled = opts.MLPipelineTLSEnabled
+		c.defaultRunAsUser = opts.DefaultRunAsUser
+		c.defaultRunAsGroup = opts.DefaultRunAsGroup
+		c.defaultRunAsNonRoot = opts.DefaultRunAsNonRoot
+		c.defaultHostUsers = opts.DefaultHostUsers
+		c.driverPodConfig = opts.DriverPodConfig
+		c.tokenReviewAudience = opts.TokenReviewAudience
 		if opts.DriverImage != "" {
 			c.driverImage = opts.DriverImage
 		}
@@ -202,6 +275,62 @@ func retrieveLastValidString(s string) string {
 	return sections[len(sections)-1]
 }
 
+// buildTTLStrategy constructs an Argo TTLStrategy from a pipeline config.
+//
+// The three proto fields map to Argo's three TTL knobs:
+//   - resource_ttl_on_completion → SecondsAfterCompletion (regardless of outcome)
+//   - resource_ttl_on_success    → SecondsAfterSuccess   (successful runs only)
+//   - resource_ttl_on_failure    → SecondsAfterFailure   (failed runs only)
+//
+// Only positive values are applied; a value of 0 (proto default) is treated as
+// "not set".  Returns nil when none of the fields is positive.
+func buildTTLStrategy(pipelineConfig *pipelinespec.PipelineConfig) *wfapi.TTLStrategy {
+	if pipelineConfig == nil {
+		return nil
+	}
+
+	afterCompletion := pipelineConfig.GetResourceTtlOnCompletion()
+	afterSuccess := pipelineConfig.GetResourceTtlOnSuccess()
+	afterFailure := pipelineConfig.GetResourceTtlOnFailure()
+
+	if afterCompletion <= 0 && afterSuccess <= 0 && afterFailure <= 0 {
+		return nil
+	}
+
+	strategy := &wfapi.TTLStrategy{}
+	if afterCompletion > 0 {
+		v := int32(afterCompletion)
+		strategy.SecondsAfterCompletion = &v
+	}
+	if afterSuccess > 0 {
+		v := int32(afterSuccess)
+		strategy.SecondsAfterSuccess = &v
+	}
+	if afterFailure > 0 {
+		v := int32(afterFailure)
+		strategy.SecondsAfterFailure = &v
+	}
+	return strategy
+}
+
+// buildActiveDeadlineSeconds returns a pointer to the active-deadline value
+// that should be set on the Argo Workflow spec.
+//
+// Semantics (opt-in, backward compatible):
+//   - pipelineConfig == nil or field <= 0 → no deadline (nil)
+//   - field > 0                           → use the user-supplied value
+func buildActiveDeadlineSeconds(pipelineConfig *pipelinespec.PipelineConfig) *int64 {
+	if pipelineConfig == nil {
+		return nil
+	}
+	userValue := pipelineConfig.GetActiveDeadlineSeconds()
+	if userValue <= 0 {
+		return nil
+	}
+	v := int64(userValue)
+	return &v
+}
+
 type workflowCompiler struct {
 	// inputs
 	job       *pipelinespec.PipelineJob
@@ -217,6 +346,42 @@ type workflowCompiler struct {
 	cacheDisabled        bool
 	defaultWorkspace     *k8score.PersistentVolumeClaimSpec
 	mlPipelineTLSEnabled bool
+	defaultRunAsUser     *int64
+	defaultRunAsGroup    *int64
+	defaultRunAsNonRoot  *bool
+	defaultHostUsers     *bool
+	driverPodConfig      *common.DriverPodConfig
+	tokenReviewAudience  string
+	kubernetesConfigs    map[string]*kubernetesplatform.KubernetesExecutorConfig
+}
+
+// applyDriverPodConfig applies driver pod labels and annotations to a workflow
+// template's metadata. Existing keys are kept, since admin configuration has lower
+// priority than metadata that the system already set.
+func applyDriverPodConfig(d *common.DriverPodConfig, tmpl *wfapi.Template) {
+	if d == nil || tmpl == nil {
+		return
+	}
+	if len(d.Labels) > 0 {
+		if tmpl.Metadata.Labels == nil {
+			tmpl.Metadata.Labels = make(map[string]string, len(d.Labels))
+		}
+		for k, v := range d.Labels {
+			if _, exists := tmpl.Metadata.Labels[k]; !exists {
+				tmpl.Metadata.Labels[k] = v
+			}
+		}
+	}
+	if len(d.Annotations) > 0 {
+		if tmpl.Metadata.Annotations == nil {
+			tmpl.Metadata.Annotations = make(map[string]string, len(d.Annotations))
+		}
+		for k, v := range d.Annotations {
+			if _, exists := tmpl.Metadata.Annotations[k]; !exists {
+				tmpl.Metadata.Annotations[k] = v
+			}
+		}
+	}
 }
 
 func (c *workflowCompiler) Resolver(name string, component *pipelinespec.ComponentSpec, resolver *pipelinespec.PipelineDeploymentConfig_ResolverSpec) error {
@@ -243,24 +408,30 @@ func (c *workflowCompiler) templateName(componentName string) string {
 }
 
 const (
-	argumentsComponents     = "components-"
+	systemPodRoleLabelKey           = "pipelines.kubeflow.org/pod-role"
+	systemTemplateNameAnnotationKey = "pipelines.kubeflow.org/template-name"
+)
+
+func addSystemPodMetadata(t *wfapi.Template, role, templateName string) {
+	if t == nil {
+		return
+	}
+	if t.Metadata.Labels == nil {
+		t.Metadata.Labels = make(map[string]string)
+	}
+	if t.Metadata.Annotations == nil {
+		t.Metadata.Annotations = make(map[string]string)
+	}
+	// Keep system pod identity in metadata so debugging does not depend on
+	// template names being embedded in the pod hostname.
+	t.Metadata.Labels[systemPodRoleLabelKey] = role
+	t.Metadata.Annotations[systemTemplateNameAnnotationKey] = templateName
+}
+
+const (
 	argumentsContainers     = "implementations-"
 	argumentsKubernetesSpec = "kubernetes-"
 )
-
-func (c *workflowCompiler) saveComponentSpec(name string, spec *pipelinespec.ComponentSpec) error {
-	hashedComponent := c.hashComponentContainer(name)
-
-	return c.saveProtoToArguments(argumentsComponents+hashedComponent, spec)
-}
-
-// useComponentSpec returns a placeholder we can refer to the component spec
-// in argo workflow fields.
-func (c *workflowCompiler) useComponentSpec(name string) (string, error) {
-	hashedComponent := c.hashComponentContainer(name)
-
-	return c.argumentsPlaceholder(argumentsComponents + hashedComponent)
-}
 
 func (c *workflowCompiler) saveComponentImpl(name string, msg proto.Message) error {
 	hashedComponent := c.hashComponentContainer(name)
@@ -373,17 +544,15 @@ func hashValue(value interface{}) (string, error) {
 }
 
 const (
-	paramComponent               = "component"      // component spec
 	paramTask                    = "task"           // task spec
 	paramTaskName                = "task-name"      // task name
 	paramContainer               = "container"      // container spec
 	paramImporter                = "importer"       // importer spec
 	paramRuntimeConfig           = "runtime-config" // job runtime config, pipeline level inputs
-	paramParentDagID             = "parent-dag-id"
-	paramExecutionID             = "execution-id"
+	paramParentDagTaskID         = "parent-dag-task-id"
+	paramParentDagTaskIDPath     = "parent-dag-task-id-path"
 	paramIterationCount          = "iteration-count"
 	paramIterationIndex          = "iteration-index"
-	paramExecutorInput           = "executor-input"
 	paramDriverType              = "driver-type"
 	paramCachedDecision          = "cached-decision"             // indicate hit cache or not
 	paramPodSpecPatch            = "pod-spec-patch"              // a strategic patch merged with the pod spec
@@ -452,9 +621,12 @@ var driverResources = k8score.ResourceRequirements{
 }
 
 // Launcher only copies the binary into the volume, so it needs minimal resources.
+// Note: Memory limit is set to 256Mi to prevent OOMKilled errors during binary copy.
+// The launcher binary is 123 MiB — nearly at the 128 MiB container memory limit.
+// The --copy operation alone uses ~59 MiB peak RSS.
 var launcherResources = k8score.ResourceRequirements{
 	Limits: map[k8score.ResourceName]k8sres.Quantity{
-		k8score.ResourceMemory: k8sres.MustParse("128Mi"),
+		k8score.ResourceMemory: k8sres.MustParse("256Mi"),
 		k8score.ResourceCPU:    k8sres.MustParse("0.5"),
 	},
 	Requests: map[k8score.ResourceName]k8sres.Quantity{
@@ -549,8 +721,12 @@ func GetWorkspacePVC(
 		return k8score.PersistentVolumeClaim{}, fmt.Errorf("workspace PVC spec must specify accessModes")
 	}
 
-	if pvcSpec.StorageClassName == nil || *pvcSpec.StorageClassName == "" {
-		return k8score.PersistentVolumeClaim{}, fmt.Errorf("workspace PVC spec must specify storageClassName")
+	// Allow nil storageClassName so Kubernetes can apply the cluster default.
+	// Explicit empty string requests "no storage class" behavior and is rejected.
+	if pvcSpec.StorageClassName != nil && *pvcSpec.StorageClassName == "" {
+		return k8score.PersistentVolumeClaim{}, fmt.Errorf(
+			"workspace PVC spec storageClassName must be omitted or set to a non-empty value",
+		)
 	}
 
 	quantity, err := k8sres.ParseQuantity(sizeStr)

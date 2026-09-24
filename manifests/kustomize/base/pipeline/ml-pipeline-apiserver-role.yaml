@@ -63,3 +63,46 @@ rules:
   - tokenreviews
   verbs:
   - create
+- apiGroups:
+  - mlflow.kubeflow.org
+  resources:
+  - experiments
+  verbs:
+  - get
+  - list
+  - create
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  resourceNames:
+  - kfp-launcher
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  - kfp-mlflow-credentials
+  verbs:
+  - get
+# Leader election lease for the run garbage collector.
+# create cannot be restricted by resourceNames per Kubernetes RBAC specification
+# (https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources).
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  resourceNames:
+  - kfp-apiserver-gc
+  verbs:
+  - get
+  - update

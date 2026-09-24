@@ -11,15 +11,21 @@ are available at their corresponding GitHub repositories.
 ### fnm
 
 ```bash
-fnm install 22.19.0
-fnm use 22.19.0
+fnm install "$(cat .nvmrc)"
+fnm use "$(cat .nvmrc)"
 ```
 
 ### nvm
 
 ```bash
-nvm install 22.19.0
-nvm use 22.19.0
+nvm install "$(cat .nvmrc)"
+nvm use "$(cat .nvmrc)"
+```
+
+Install the npm version declared in [`package.json`](package.json):
+
+```bash
+npm install --global "$(node -p 'require("./package.json").packageManager')"
 ```
 
 ## Manage dev environment with npm
@@ -54,7 +60,17 @@ Install the NPM dependencies:
 
 ### Daily workflow
 
-You will see a lot of `npm run xxx` commands in the instructions below, the actual script being run is defined in the "scripts" field of [package.json](https://github.com/kubeflow/pipelines/blob/91db95a601fa7fffcb670cb744a5dcaeb08290ae/frontend/package.json#L32). Common development scripts are maintained in package.json, and we use npm to call them conveniently.
+You will see a lot of `npm run xxx` commands in the instructions below. The actual scripts are defined in the `scripts` field of [package.json](./package.json). Common development scripts are maintained there, and we use npm to call them conveniently.
+
+## Frontend stack
+
+- React 19 with TypeScript
+- MUI v5 with Emotion
+- TanStack Query v5
+- React Router v8 (declarative hash routing)
+- Vitest with Testing Library v16 for UI tests
+- Vitest for frontend server tests
+- Storybook 10
 
 ### npm next step
 
@@ -62,13 +78,16 @@ You can learn more about npm in https://docs.npmjs.com/about-npm/.
 
 ## Start frontend development server
 
-You can then do `npm start` to run a webpack dev server at port 3000 that
+You can then do `npm start` to run a Vite dev server at port 3000 that
 watches the source files. It also redirects api requests to localhost:3001. For
 example, requesting the pipelines page sends a fetch request to
 http://localhost:3000/apis/v1beta1/pipelines, which is proxied by the
 webserver to http://localhost:3001/apis/v1beta1/pipelines,
-which should return the list of pipelines. To override the port used by webpack,
-you can set the `PORT` environment variable.
+which should return the list of pipelines. To override the port, run
+`npm run start -- --port 3002` or update `frontend/vite.config.mts`.
+
+The development bootstrap renders the app under React Strict Mode. Production
+builds remain outside Strict Mode.
 
 Follow the next section to start an API server (mock or proxy) to let localhost:3001
 respond to API requests.
@@ -77,17 +96,17 @@ respond to API requests.
 
 ### Api mock server
 
-This is the easiest way to start developing, but it does not support all apis during
-development.
+This is the easiest way to start developing fixture-backed UI flows, but it does
+not support every backend API used by KFP.
 
 Run `npm run mock:api` to start a mock backend api server handler so it can
-serve basic api calls with mock data.
+serve basic api calls with mock data. The mock backend includes enough v2beta1
+fixtures for the primary Pipelines, Experiments, Runs, and Recurring Runs list
+pages, along with v1beta1 fixtures used by older flows.
 
-If you want to port real MLMD store to be used for mock backend scenario, you can run the following command. Note that a mock MLMD store doesn't exist yet.
-
-```
-kubectl port-forward svc/metadata-envoy-service 9090:9090
-```
+Use the real-cluster proxy path below when you need behavior that depends on
+Kubernetes, native tasks and artifacts, pod logs, authentication, or full backend
+semantics.
 
 ### Proxy to a real cluster
 
@@ -96,7 +115,7 @@ deployment running on a remote or local Kubernetes cluster. This dramatically
 improves iteration time, especially since the docker build can take 20+ minutes.
 
 KFP can be deployed in single-user or multi-user mode. Since there's a delta in
-logic between between the two modes, automated tests and manual validation
+logic between the two modes, automated tests and manual validation
 against a single-user cluster can still fail when deployed to a multi-user
 cluster.
 
@@ -118,19 +137,19 @@ make kind-cluster-agnostic
 
 #### Multi-user
 
-1. Install Kubernetes and deploy KFP to it on your your local machine by
+1. Install Kubernetes and deploy KFP to it on your local machine by
    following the [multi-user Kubeflow installation instructions](https://github.com/kubeflow/manifests?tab=readme-ov-file#installation).
 2. Run `cd frontend`.
 3. Run the following code block.
 
     ```bash
-    export REACT_APP_NAMESPACE=kubeflow-user-example-com
+    export VITE_NAMESPACE=kubeflow-user-example-com
     npm run build
     ```
 
    If you're targeting the cluster installed in step 1, the target namespace
    defaults to `kubeflow-user-example-com`. If you're targeting a different
-   cluster / namespace, make sure to update the `REACT_APP_NAMESPACE`
+   cluster / namespace, make sure to update the `VITE_NAMESPACE`
    environment variable.
 4. Install
    [mod-header](https://chromewebstore.google.com/detail/modheader-modify-http-hea/idgpnmonknjnojddfkpgkljpfnnfcklj?hl=en)
@@ -148,7 +167,7 @@ make kind-cluster-agnostic
     you'll need to run the following first:
 
     ```bash
-    unset REACT_APP_NAMESPACE
+    unset VITE_NAMESPACE
     npm run build
     ```
 
@@ -158,12 +177,34 @@ There are a few types of tests during pre-submit:
 
 * formatting, refer to [Code Style Section](#code-style)
 * linting, you can also run locally with `npm run lint`
-* client UI unit tests, you can run locally with `npm test`
-* UI node server unit tests, you can run locally with `cd server && npm test`
+  (`npm run lint:ui` and `npm run lint:server` are available for narrower checks)
+  ESLint 10 uses the flat configuration in `eslint.config.cjs`; add shared rules there rather
+  than creating nested legacy `.eslintrc` files.
+* TypeScript typecheck (no emit), run locally with `npm run typecheck`
+* React peer compatibility gate, run locally with `npm run check:react-peers`
+  (targets React 19 by default)
+* client UI unit tests (Vitest + Testing Library v16), you can run locally with
+  `npm run test:ui` (uncapped workers) or `npm run test:ui:coverage:loop` for
+  stability loops (coverage + `--maxWorkers 4`). `npm test` is an alias for
+  `vitest run`. The global test setup enables Testing Library
+  `reactStrictMode`, so direct `render()` calls exercise the same Strict Mode
+  behavior as `npm start`.
+* UI node server unit tests (Vitest), you can run locally with
+  `npm run test:server:coverage` or `cd server && npm test -- --coverage`.
+  Server integration tests also require `python3` (3.9+) on `PATH` to run the
+  profile-controller archived-log regression. It uses only the Python standard library.
 
-There is a special type of unit test called [snapshot tests](https://jestjs.io/docs/en/snapshot-testing). When
-snapshot tests are failing, you can update them automatically with `npm test -u` and run all tests. Then commit
-the snapshot changes.
+There is a special type of unit test called
+[snapshot tests](https://vitest.dev/guide/snapshot.html). When snapshot tests
+are failing, you can update them automatically with `npm test -u` or
+`npm run test:ui -- -u` (Vitest) and run all tests. For server test snapshots
+(if any), use `cd server && npm test -- -u`. Then commit the snapshot changes.
+
+## Frontend coding conventions
+
+- Prefer Testing Library and assertions against user-visible behavior in new UI tests. Avoid Enzyme and implementation-detail testing in new code. For examples, see [frontend/src/pages/ArtifactDetails.test.tsx](src/pages/ArtifactDetails.test.tsx) and [frontend/src/pages/RunDetailsV2.test.tsx](src/pages/RunDetailsV2.test.tsx).
+- Keep snapshot tests small and intentional. Use them as focused regression coverage, not as a substitute for behavioral assertions.
+- Prefer prop/state-driven data flow over imperative refs. Reach for `useEffect` when synchronizing with systems outside React, not for derived UI state. For more detailed guidance used in reviews, see the [React effects guide](../docs/agents/frontend.md#react-effects).
 
 ## Production Build
 
@@ -223,84 +264,25 @@ guide [here](https://prettier.io/docs/en/ignore.html). (Most likely you don't ne
 ## Api client code generation
 
 If you made any changes to protos (see backend/README), you'll need to
-regenerate the Typescript client library from swagger. We use
-swagger-codegen-cli@2.4.7, which you can get
-[here](https://repo1.maven.org/maven2/io/swagger/swagger-codegen-cli/2.4.7/).
-Make sure to add the jar file to $PATH with the name swagger-codegen-cli.jar, then run `npm run apis` for
-v1 api or `npm run apis:v2beta1` for v2 api.
+regenerate the Typescript client library from swagger. The frontend uses
+OpenAPI Generator via Docker (`openapitools/openapi-generator-cli:v7.19.0`).
+Make sure Docker is running, then run `npm run apis` for v1 api,
+`npm run apis:v2beta1` for v2 api, or `npm run apis:all` to regenerate every
+frontend and server surface in one pass.
+
+You can also generate individual surfaces, for example:
+
+```bash
+npm run apis:run
+npm run apis:v2beta1:run
+# or invoke the generator directly from the repo root:
+node frontend/scripts/generate_openapi_typescript_fetch.js v1:run
 ```
-// add jar file to $PATH
-JAR_PATH=<folder-path-to-jar-file>
-export PATH="$JAR_PATH:$PATH"
-```
-After code generation, you should run `npm run format` to format the output and avoid creating a large PR.
-
-## MLMD components
-
-* `src/mlmd` - components for visualizing data from an `ml-metadata` store. For more information see the
-  [google/ml-metadata](https://github.com/google/ml-metadata) repository.
-
-This module previously lived in [kubeflow/frontend](https://github.com/kubeflow/frontend) repository. It contains tsx files for visualizing MLMD components.
-
-MLMD protos lives in `pipelines/third_party/ml-metadata/ml_metadata/`, and the generated JS files live in `pipelines/frontend/src/third_party/mlmd`.
-
-### Building generated metadata Protocol Buffers
-
-* `build:protos` - for compiling Protocol Buffer definitions
-
-
-This project contains a mix of natively defined classes and classes generated by the Protocol
-Buffer Compiler from definitions in the [pipelines/third_party/ml-metadata/ml_metadata/](third_party/ml-metadata/ml_metadata/) directory. Copies of the generated classes are
-included in the [pipelines/frontend/src/third_party/mlmd](frontend/src/third_party/mlmd) directory to allow the build process to succeed without a dependency on
-the Protocol Buffer compiler, `protoc`, being in the system PATH.
-
-If a file in [pipelines/third_party/ml-metadata/ml_metadata/proto](third_party/ml-metadata/ml_metadata/proto) is modified or you need to manually re-generate the protos, you'll need to:
-
-* Add `protoc` ([download](https://github.com/protocolbuffers/protobuf/releases)) to your system
-  PATH
-
-  ```bash
-  # Example:
-  apt install -y protobuf-compiler=3.15.8
-  ```
-
-* Add `protoc-gen-grpc-web` ([download](https://github.com/grpc/grpc-web/releases)) to your system
-  PATH
-
-  ```bash
-  # Example:
-  curl -LO https://github.com/grpc/grpc-web/releases/download/1.4.2/protoc-gen-grpc-web-1.4.2-linux-x86_64
-  mv protoc-gen-grpc-web-1.4.2-linux-x86_64 /usr/local/bin/protoc-gen-grpc-web
-  chmod +x /usr/local/bin/protoc-gen-grpc-web
-  ```
-
-* Replace `metadata_store.proto` and `metadata_store_service.proto` proto files with target mlmd version by running
-
-  ```bash
-  npm run build:replace -- {mlmd_versions}
-  // example:
-  // npm run build:replace -- 1.0.0
-  ```
-
-* Generate new protos by running
-
-  ```bash
-  npm run build:protos
-  ```
-
-The script run by `npm run build:replace` can be found at `scripts/replace_protos.js`.
-The script run by `npm run build:protos` can be found at `scripts/gen_grpc_web_protos.js`.
-
-The current TypeScript proto library was generated with `protoc-gen-grpc-web` version 1.2.1 with
-`protoc` version 3.17.3.
-
-The Protocol Buffers in [pipelines/third_party/ml-metadata/ml_metadata/proto](third_party/ml-metadata/ml_metadata/proto) are taken from the target version(v1.0.0 by default) of the `ml_metadata` proto
-package from
-[google/ml-metadata](https://github.com/google/ml-metadata/tree/master/ml_metadata/proto).
+Code generation formats the generated files automatically.
 
 ## Pipeline Spec (IR) API
 
-For KFP v2, we use pipeline spec or IR(Intermediate Representation) to represent a Pipeline definition. It is saved as json payload when transmitted. You can find the API in [api/v2alpha1/pipeline_spec.proto](api/v2alpha1/pipeline_spec.proto). To take the latest of this file and compile it to Typescript classes, follow the below step:
+For KFP v2, we use pipeline spec or IR(Intermediate Representation) to represent a Pipeline definition. It is saved as json payload when transmitted. You can find the API in [api/v2alpha1/pipeline_spec.proto](/api/v2alpha1/pipeline_spec.proto). To take the latest of this file and compile it to Typescript classes, follow the below step:
 
 ```
 npm run build:pipeline-spec
@@ -315,7 +297,7 @@ Prerequisite: Add `protoc` ([download](https://github.com/protocolbuffers/protob
 Compile pipeline_spec.proto to Typed classes in TypeScript,
 so it can convert a payload stream to a PipelineSpec object during runtime.
 
-You can check out the result like `pipeline_spec_pb.js`, `pipeline_spec_pb.d.ts` in [frontend/src/generated/pipeline_spec](/frontend/src/generated/pipeline_spec).
+You can check out the generated TypeScript outputs like `pipeline_spec.ts` and `google/rpc/status.ts` in [frontend/src/generated/pipeline_spec](/frontend/src/generated/pipeline_spec).
 
 The plugin tool for conversion we currently use is [ts-proto](https://github.com/stephenh/ts-proto). We previously use
 [protobuf.js](https://github.com/protobufjs/protobuf.js) but it doesn't natively support Protobuf.Value processing.
@@ -328,14 +310,14 @@ You can checkout the generated TypeScript interfaces in [frontend/src/generated/
 protoc doesn't provide a way to convert plain object to
 payload stream, therefore we need a helper tool `protobuf.js` to validate and encode plain object.
 
-You can check out the result like `pbjs_ml_pipelines.js`, `pbjs_ml_pipelines.d.ts` in [frontend/src/generated/pipeline_spec](frontend/src/generated/pipeline_spec).
+You can check out the result like `pbjs_ml_pipelines.js`, `pbjs_ml_pipelines.d.ts` in [frontend/src/generated/pipeline_spec](/frontend/src/generated/pipeline_spec).
 -->
 
 ## Platform Spec API
 For KFP v2, we use platform spec to represent a platform definition.
 
 ### Kubernetes
-The details of Kubernetes platform is in [kubernetes_platform/proto/kubernetes_executor_config.proto](kubernetes_platform/proto/kubernetes_executor_config.proto). To take the latest of this file and compile it to Typescript classes, follow the below step:
+The details of Kubernetes platform is in [kubernetes_platform/proto/kubernetes_executor_config.proto](/kubernetes_platform/proto/kubernetes_executor_config.proto). To take the latest of this file and compile it to Typescript classes, follow the below step:
 
 ```
 npm run build:platform-spec:kubernetes-platform
@@ -345,7 +327,7 @@ npm run build:platform-spec:kubernetes-platform
 
 To accommodate KFP v2 development, we create a `frontend feature flag` capability which hides features under development behind a flag. Only when developer explicitly enables these flags, they can see those features. To control the visibility of these features, check out a webpage similar to pattern http://localhost:3000/#/frontend_features.
 
-To manage feature flags default values, visit [frontend/src/feature.ts](frontend/src/feature.ts) for `const features`. To apply the default feature flags locally in your browser, run `localStorage.setItem('flags', "")` in browser console.
+To manage feature flags default values, visit [frontend/src/features.ts](/frontend/src/features.ts) for `const features`. To apply the default feature flags locally in your browser, run `localStorage.setItem('flags', "")` in browser console.
 
 ## Storybook
 

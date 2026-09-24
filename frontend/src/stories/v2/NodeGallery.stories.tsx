@@ -14,25 +14,19 @@
  * limitations under the License.
  */
 
-import { ComponentMeta, ComponentStory } from '@storybook/react';
-import React from 'react';
-import ReactFlow, {
-  Background,
-  Controls,
-  MiniMap,
-  OnLoadParams,
-  ReactFlowProvider,
-} from 'react-flow-renderer';
+import { Meta, StoryObj } from '@storybook/react';
+import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import 'src/build/tailwind.output.css';
 import {
   ArtifactFlowElementData,
   ExecutionFlowElementData,
   FlowElementDataBase,
 } from 'src/components/graph/Constants';
+import { PipelineTaskTaskState } from 'src/apisv2beta1/run';
 import { NodeTypeNames, NODE_TYPES } from 'src/lib/v2/StaticFlow';
-import { Artifact, Execution } from 'src/third_party/mlmd';
 
-const elements = [
+const nodes = [
   {
     id: '2',
     type: NodeTypeNames.EXECUTION,
@@ -45,7 +39,7 @@ const elements = [
     position: { x: 100, y: 200 },
     data: {
       label: 'UNKNOWN execution node',
-      state: Execution.State.UNKNOWN,
+      state: PipelineTaskTaskState.RUNTIME_STATE_UNSPECIFIED,
     } as ExecutionFlowElementData,
   },
   {
@@ -54,7 +48,7 @@ const elements = [
     position: { x: 100, y: 300 },
     data: {
       label: 'NEW execution node',
-      state: Execution.State.NEW,
+      state: PipelineTaskTaskState.RUNTIME_STATE_UNSPECIFIED,
     } as ExecutionFlowElementData,
   },
   {
@@ -63,7 +57,7 @@ const elements = [
     position: { x: 100, y: 400 },
     data: {
       label: 'RUNNING execution node',
-      state: Execution.State.RUNNING,
+      state: PipelineTaskTaskState.RUNNING,
     } as ExecutionFlowElementData,
   },
   {
@@ -72,7 +66,7 @@ const elements = [
     position: { x: 100, y: 500 },
     data: {
       label: 'COMPLETE execution node',
-      state: Execution.State.COMPLETE,
+      state: PipelineTaskTaskState.SUCCEEDED,
     } as ExecutionFlowElementData,
   },
   {
@@ -81,7 +75,7 @@ const elements = [
     position: { x: 100, y: 600 },
     data: {
       label: 'CACHED execution node',
-      state: Execution.State.CACHED,
+      state: PipelineTaskTaskState.CACHED,
     } as ExecutionFlowElementData,
   },
   {
@@ -90,7 +84,7 @@ const elements = [
     position: { x: 100, y: 700 },
     data: {
       label: 'CANCELED execution node',
-      state: Execution.State.CANCELED,
+      state: PipelineTaskTaskState.SKIPPED,
     } as ExecutionFlowElementData,
   },
   {
@@ -99,7 +93,7 @@ const elements = [
     position: { x: 100, y: 800 },
     data: {
       label: 'FAILED execution node',
-      state: Execution.State.FAILED,
+      state: PipelineTaskTaskState.FAILED,
     } as ExecutionFlowElementData,
   },
   {
@@ -108,7 +102,7 @@ const elements = [
     position: { x: 100, y: 900 },
     data: {
       label: 'invalid execution node',
-      state: 8 as Execution.State,
+      state: 'INVALID' as PipelineTaskTaskState,
     } as ExecutionFlowElementData,
   },
   {
@@ -117,7 +111,7 @@ const elements = [
     position: { x: 400, y: 100 },
     data: {
       label: 'DEFAULT artifact node',
-      state: Artifact.State.UNKNOWN,
+      hasArtifact: false,
     } as ArtifactFlowElementData,
   },
   {
@@ -126,7 +120,7 @@ const elements = [
     position: { x: 400, y: 200 },
     data: {
       label: 'LIVE artifact node',
-      state: Artifact.State.LIVE,
+      hasArtifact: true,
     } as ArtifactFlowElementData,
   },
   {
@@ -140,21 +134,18 @@ const elements = [
 ];
 
 function WrappedNodeGallery({}) {
-  const onLoad = (reactFlowInstance: OnLoadParams) => {
-    reactFlowInstance.fitView();
-  };
-
   return (
     <div style={{ width: '1200px', height: '1000px' }}>
       {/* // className='flex container mx-auto' */}
       <ReactFlowProvider>
         <ReactFlow
           style={{ background: '#F5F5F5' }}
-          elements={elements}
+          nodes={nodes}
+          edges={[]}
           snapToGrid={true}
           nodeTypes={NODE_TYPES}
           edgeTypes={{}}
-          onLoad={onLoad}
+          onInit={(instance) => instance.fitView()}
         >
           <MiniMap />
           <Controls />
@@ -165,17 +156,17 @@ function WrappedNodeGallery({}) {
   );
 }
 
-export default {
+const meta: Meta<typeof WrappedNodeGallery> = {
   title: 'v2/NodeGallery',
   component: WrappedNodeGallery,
   argTypes: {
     backgroundColor: { control: 'color' },
   },
-} as ComponentMeta<typeof WrappedNodeGallery>;
+};
 
-const Template: ComponentStory<typeof WrappedNodeGallery> = args => (
-  <WrappedNodeGallery {...args} />
-);
+export default meta;
+type Story = StoryObj<typeof WrappedNodeGallery>;
 
-export const Primary = Template.bind({});
-Primary.args = {};
+export const Primary: Story = {
+  args: {},
+};

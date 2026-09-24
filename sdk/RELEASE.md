@@ -2,6 +2,12 @@
 
 ## Features
 
+* Add Kubernetes Dynamic Resource Allocation support. This feature requires
+  Kubernetes 1.31 or later with the `DynamicResourceAllocation` feature gate
+  enabled (GA and enabled by default in Kubernetes 1.34), an installed DRA
+  driver, and the KFP backend from the same release as this SDK. Older backends
+  reject pipelines containing the new DRA platform field.
+
 ## Breaking changes
 
 ## Deprecations
@@ -57,14 +63,14 @@
 
 ## Bug Fixes
 
-* **sdk:** chore: remove pin on protobuf 6 ver & use requirements.in for kfp-k8s and spec (#12345) 
-* **sdk:** chore: regenerate files for ver upgrade (#12341) 
+* **sdk:** chore: remove pin on protobuf 6 ver & use requirements.in for kfp-k8s and spec (#12345)
+* **sdk:** chore: regenerate files for ver upgrade (#12341)
 
 # 2.14.5
 
 ## Bug Fixes
 
-* **sdk:**  fix: include requirements files in python sdist (#12330) 
+* **sdk:**  fix: include requirements files in python sdist (#12330)
 
 # 2.14.4
 
@@ -364,7 +370,7 @@ The KFP SDK 2.0.0 release contains features present in the KFP SDK v1's v2 names
 * Support for using [pipelines as components](https://www.kubeflow.org/docs/components/pipelines/v2/pipelines/pipeline-basics/#pipelines-as-components) (pipeline in pipeline)
 * Various additional [configurations for tasks](https://www.kubeflow.org/docs/components/pipelines/v2/pipelines/pipeline-basics/#task-configurations)
 * Compilation to an Argo-independent [pipeline definition](https://www.kubeflow.org/docs/components/pipelines/v2/compile-a-pipeline/#ir-yaml) that enables pipelines to be compiled once and run anywhere
-* Additonal SDK client functionality
+* Additional SDK client functionality
 * An improved [KFP CLI](https://www.kubeflow.org/docs/components/pipelines/v2/cli/)
 * Refreshed [user documentation](https://www.kubeflow.org/docs/components/pipelines/v2/) and [reference documentation](https://kubeflow-pipelines.readthedocs.io/en/sdk-2.0.0/)
 
@@ -390,7 +396,7 @@ Selected contributions from pre-releases:
 * Support single element `then` and `else_` arguments to `IfPresentPlaceholder` [\#8414](https://github.com/kubeflow/pipelines/pull/8414)
 * Enable use of input and output placeholders in f-strings [\#8494](https://github.com/kubeflow/pipelines/pull/8494)
 * Add comments to IR YAML file [\#8467](https://github.com/kubeflow/pipelines/pull/8467)
-* Support fanning-in parameters [\#8631](https://github.com/kubeflow/pipelines/pull/8631) and artifacts [\#8808](https://github.com/kubeflow/pipelines/pull/8808) from tasks in a `dsl.ParellelFor` context using `dsl.Collected`
+* Support fanning-in parameters [\#8631](https://github.com/kubeflow/pipelines/pull/8631) and artifacts [\#8808](https://github.com/kubeflow/pipelines/pull/8808) from tasks in a `dsl.ParallelFor` context using `dsl.Collected`
 * Support `.ignore_upstream_failure()` on `PipelineTask` [\#8838](https://github.com/kubeflow/pipelines/pull/8838)
 * Support setting cpu/memory requests [\#9121](https://github.com/kubeflow/pipelines/pull/9121)
 * Support additional pipeline placeholders
@@ -543,7 +549,7 @@ Technically no breaking changes but compilation error could be exposed in a diff
 # 2.0.0-beta.13
 
 ## Features
-* Support fanning-in artifact outputs from a task in a `dsl.ParellelFor` context using `dsl.Collected` [\#8808](https://github.com/kubeflow/pipelines/pull/8808)
+* Support fanning-in artifact outputs from a task in a `dsl.ParallelFor` context using `dsl.Collected` [\#8808](https://github.com/kubeflow/pipelines/pull/8808)
 * Introduces a new syntax for pipeline tasks to consume outputs from the upstream task while at the same time ignoring if the upstream tasks succeeds or not. [\#8838](https://github.com/kubeflow/pipelines/pull/8838)
 
 ## Breaking changes
@@ -562,7 +568,7 @@ Technically no breaking changes but compilation error could be exposed in a diff
 # 2.0.0-beta.12
 
 ## Features
-* Support fanning-in parameter outputs from a task in a `dsl.ParellelFor` context using `dsl.Collected` [\#8631](https://github.com/kubeflow/pipelines/pull/8631)
+* Support fanning-in parameter outputs from a task in a `dsl.ParallelFor` context using `dsl.Collected` [\#8631](https://github.com/kubeflow/pipelines/pull/8631)
 
 ## Breaking changes
 
@@ -594,7 +600,7 @@ Technically no breaking changes but compilation error could be exposed in a diff
 ## Deprecations
 
 ## Bug fixes and other changes
-* Fully support optional parameter inputs by witing `isOptional` field to IR [\#8612](https://github.com/kubeflow/pipelines/pull/8612)
+* Fully support optional parameter inputs by writing `isOptional` field to IR [\#8612](https://github.com/kubeflow/pipelines/pull/8612)
 * Add support for optional artifact inputs (toward feature parity with KFP SDK v1) [\#8623](https://github.com/kubeflow/pipelines/pull/8623)
 * Fix bug deserializing v1 component YAML with boolean defaults, struct defaults, and array defaults [\#8639](https://github.com/kubeflow/pipelines/pull/8639)
 
@@ -1076,7 +1082,7 @@ Technically no breaking changes but compilation error could be exposed in a diff
 
 ## Bug Fixes and Other Changes
 
-* Fix the the specified 'mlpipeline-ui-metadata','mlpipeline-metrics' path is overrided by default value [\#6796](https://github.com/kubeflow/pipelines/pull/6796)
+* Fix the specified 'mlpipeline-ui-metadata','mlpipeline-metrics' path is overridden by default value [\#6796](https://github.com/kubeflow/pipelines/pull/6796)
 * Fix placeholder mapping error in v2. [\#6794](https://github.com/kubeflow/pipelines/pull/6794)
 * Add `OnTransientError` to allowed retry policies [\#6808](https://github.com/kubeflow/pipelines/pull/6808)
 * Add optional `filter` argument to list methods of KFP client [\#6748](https://github.com/kubeflow/pipelines/pull/6748)

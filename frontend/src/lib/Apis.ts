@@ -12,20 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as portableFetch from 'portable-fetch';
-import { ExperimentServiceApi, FetchAPI } from 'src/apis/experiment';
-import { ExperimentServiceApi as ExperimentServiceApiV2 } from 'src/apisv2beta1/experiment';
-import { JobServiceApi } from 'src/apis/job';
-import { RecurringRunServiceApi } from 'src/apisv2beta1/recurringrun';
-import { ApiPipeline, ApiPipelineVersion, PipelineServiceApi } from 'src/apis/pipeline';
 import {
+  Configuration as ExperimentConfiguration,
+  ExperimentServiceApi,
+  FetchAPI,
+} from 'src/apis/experiment';
+import {
+  Configuration as ExperimentConfigurationV2,
+  ExperimentServiceApi as ExperimentServiceApiV2,
+} from 'src/apisv2beta1/experiment';
+import {
+  ArtifactServiceApi as ArtifactServiceApiV2,
+  Configuration as ArtifactConfigurationV2,
+} from 'src/apisv2beta1/artifact';
+import { Configuration as JobConfiguration, JobServiceApi } from 'src/apis/job';
+import {
+  Configuration as RecurringRunConfiguration,
+  RecurringRunServiceApi,
+} from 'src/apisv2beta1/recurringrun';
+import {
+  ApiPipeline,
+  ApiPipelineVersion,
+  Configuration as PipelineConfiguration,
+  PipelineServiceApi,
+} from 'src/apis/pipeline';
+import {
+  Configuration as PipelineConfigurationV2,
   V2beta1Pipeline,
   V2beta1PipelineVersion,
   PipelineServiceApi as PipelineServiceApiV2,
 } from 'src/apisv2beta1/pipeline';
-import { RunServiceApi as RunServiceApiV1 } from 'src/apis/run';
-import { RunServiceApi as RunServiceApiV2 } from 'src/apisv2beta1/run';
-import { ApiVisualization, VisualizationServiceApi } from 'src/apis/visualization';
+import {
+  Configuration as RunConfigurationV1,
+  RunServiceApi as RunServiceApiV1,
+} from 'src/apis/run';
+import {
+  Configuration as RunConfigurationV2,
+  RunServiceApi as RunServiceApiV2,
+} from 'src/apisv2beta1/run';
+import {
+  ApiVisualization,
+  Configuration as VisualizationConfiguration,
+  VisualizationServiceApi,
+} from 'src/apis/visualization';
 import { HTMLViewerConfig } from 'src/components/viewers/HTMLViewer';
 import { PlotType } from 'src/components/viewers/Viewer';
 import * as Utils from './Utils';
@@ -65,7 +94,7 @@ let customVisualizationsAllowed: boolean;
 // For cross browser support, fetch should use 'same-origin' as default. This fixes firefox auth issues.
 // Refrence: https://github.com/github/fetch#sending-cookies
 const crossBrowserFetch: FetchAPI = (url, init) =>
-  portableFetch(url, { credentials: 'same-origin', ...init });
+  fetch(url, { credentials: 'same-origin', ...init });
 
 export class Apis {
   public static async areCustomVisualizationsAllowed(): Promise<boolean> {
@@ -155,13 +184,14 @@ export class Apis {
     return path.endsWith('/') ? path.substr(0, path.length - 1) : path;
   }
 
-  // TODO(jlyaoyuli): deprecrate v1 experimentServiceApi function after all integrations.
+  // TODO(jlyaoyuli): deprecate v1 experimentServiceApi function after all integrations.
   public static get experimentServiceApi(): ExperimentServiceApi {
     if (!this._experimentServiceApi) {
       this._experimentServiceApi = new ExperimentServiceApi(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new ExperimentConfiguration({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._experimentServiceApi;
@@ -171,20 +201,34 @@ export class Apis {
   public static get experimentServiceApiV2(): ExperimentServiceApiV2 {
     if (!this._experimentServiceApiV2) {
       this._experimentServiceApiV2 = new ExperimentServiceApiV2(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new ExperimentConfigurationV2({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._experimentServiceApiV2;
   }
 
+  public static get artifactServiceApiV2(): ArtifactServiceApiV2 {
+    if (!this._artifactServiceApiV2) {
+      this._artifactServiceApiV2 = new ArtifactServiceApiV2(
+        new ArtifactConfigurationV2({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
+      );
+    }
+    return this._artifactServiceApiV2;
+  }
+
   public static get jobServiceApi(): JobServiceApi {
     if (!this._jobServiceApi) {
       this._jobServiceApi = new JobServiceApi(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new JobConfiguration({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._jobServiceApi;
@@ -193,9 +237,10 @@ export class Apis {
   public static get recurringRunServiceApi(): RecurringRunServiceApi {
     if (!this._recurringRunServiceApi) {
       this._recurringRunServiceApi = new RecurringRunServiceApi(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new RecurringRunConfiguration({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._recurringRunServiceApi;
@@ -204,9 +249,10 @@ export class Apis {
   public static get pipelineServiceApi(): PipelineServiceApi {
     if (!this._pipelineServiceApi) {
       this._pipelineServiceApi = new PipelineServiceApi(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new PipelineConfiguration({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._pipelineServiceApi;
@@ -215,9 +261,10 @@ export class Apis {
   public static get pipelineServiceApiV2(): PipelineServiceApiV2 {
     if (!this._pipelineServiceApiV2) {
       this._pipelineServiceApiV2 = new PipelineServiceApiV2(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new PipelineConfigurationV2({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._pipelineServiceApiV2;
@@ -226,9 +273,10 @@ export class Apis {
   public static get runServiceApi(): RunServiceApiV1 {
     if (!this._runServiceApiV1) {
       this._runServiceApiV1 = new RunServiceApiV1(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new RunConfigurationV1({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._runServiceApiV1;
@@ -237,9 +285,10 @@ export class Apis {
   public static get runServiceApiV2(): RunServiceApiV2 {
     if (!this._runServiceApiV2) {
       this._runServiceApiV2 = new RunServiceApiV2(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new RunConfigurationV2({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._runServiceApiV2;
@@ -248,9 +297,10 @@ export class Apis {
   public static get visualizationServiceApi(): VisualizationServiceApi {
     if (!this._visualizationServiceApi) {
       this._visualizationServiceApi = new VisualizationServiceApi(
-        { basePath: this.basePath },
-        undefined,
-        crossBrowserFetch,
+        new VisualizationConfiguration({
+          basePath: this.basePath,
+          fetchApi: crossBrowserFetch,
+        }),
       );
     }
     return this._visualizationServiceApi;
@@ -276,16 +326,25 @@ export class Apis {
    */
   public static readFile({
     path,
+    artifactUriQuery,
     providerInfo,
     namespace,
     peek,
   }: {
     path: StoragePath;
+    artifactUriQuery?: string;
     namespace?: string;
     providerInfo?: string;
     peek?: number;
   }): Promise<string> {
-    let query = this.buildReadFileUrl({ path, namespace, providerInfo, peek, isDownload: false });
+    let query = this.buildReadFileUrl({
+      path,
+      namespace,
+      artifactUriQuery,
+      providerInfo,
+      peek,
+      isDownload: false,
+    });
     return this._fetch(query);
   }
 
@@ -299,26 +358,47 @@ export class Apis {
    */
   public static buildReadFileUrl({
     path,
+    artifactUriQuery,
     namespace,
     providerInfo,
     peek,
     isDownload,
   }: {
     path: StoragePath;
+    artifactUriQuery?: string;
     namespace?: string;
     providerInfo?: string;
     peek?: number;
     isDownload?: boolean;
   }) {
-    const { source, bucket, key } = path;
+    const { source, bucket, key, uriKey } = path;
+    const keyEncoding = path.keyEncoding ?? 'storage';
     if (isDownload) {
-      return `artifacts/${source}/${bucket}/${key}${buildQuery({
+      // Keep object keys in the query so browsers do not normalize standalone dot path segments.
+      return `artifacts/get${buildQuery({
+        source,
         namespace,
+        artifactUriQuery,
         providerInfo,
         peek,
+        bucket,
+        key,
+        keyEncoding,
+        uriKey,
+        download: 'true',
       })}`;
     } else {
-      return `artifacts/get${buildQuery({ source, namespace, providerInfo, peek, bucket, key })}`;
+      return `artifacts/get${buildQuery({
+        source,
+        namespace,
+        artifactUriQuery,
+        providerInfo,
+        peek,
+        bucket,
+        key,
+        keyEncoding,
+        uriKey,
+      })}`;
     }
   }
 
@@ -338,19 +418,19 @@ export class Apis {
   }
 
   /**
-   * Gets the address (IP + port) of a Tensorboard service given the logdir and tfversion
+   * Gets the scoped proxy path for a TensorBoard service given the logdir.
    */
   public static getTensorboardApp(
     logdir: string,
     namespace: string,
-  ): Promise<{ podAddress: string; tfVersion: string; image: string }> {
-    return this._fetchAndParse<{ podAddress: string; tfVersion: string; image: string }>(
+  ): Promise<{ proxyPath: string; tfVersion: string; image: string }> {
+    return this._fetchAndParse<{ proxyPath: string; tfVersion: string; image: string }>(
       `apps/tensorboard${buildQuery({ logdir, namespace })}`,
     );
   }
 
   /**
-   * Starts a deployment and service for Tensorboard given the logdir.
+   * Starts a deployment and service for TensorBoard given the logdir.
    */
   public static startTensorboardApp({
     logdir,
@@ -377,10 +457,10 @@ export class Apis {
   }
 
   /**
-   * Check if the underlying Tensorboard pod is actually up, given the pod address
+   * Checks if the scoped TensorBoard proxy path is ready.
    */
-  public static async isTensorboardPodReady(path: string): Promise<boolean> {
-    const resp = await fetch(path, { method: 'HEAD' });
+  public static async isTensorboardPodReady(proxyPath: string): Promise<boolean> {
+    const resp = await fetch(proxyPath, { method: 'HEAD' });
     return resp.ok;
   }
 
@@ -455,6 +535,7 @@ export class Apis {
     pipelineDescription: string,
     pipelineData: File,
     namespace?: string,
+    codeSourceUrl?: string,
   ): Promise<V2beta1Pipeline> {
     const fd = new FormData();
     fd.append('uploadfile', pipelineData, pipelineData.name);
@@ -464,6 +545,9 @@ export class Apis {
 
     if (namespace) {
       query = `${query}&namespace=${encodeURIComponent(namespace)}`;
+    }
+    if (codeSourceUrl) {
+      query = `${query}&code_source_url=${encodeURIComponent(codeSourceUrl)}`;
     }
 
     return await this._fetchAndParse<V2beta1Pipeline>('/pipelines/upload', v2beta1Prefix, query, {
@@ -479,6 +563,7 @@ export class Apis {
     pipelineId: string,
     versionData: File,
     description?: string,
+    codeSourceUrl?: string,
   ): Promise<V2beta1PipelineVersion> {
     const fd = new FormData();
     fd.append('uploadfile', versionData, versionData.name);
@@ -487,7 +572,8 @@ export class Apis {
       v2beta1Prefix,
       `name=${encodeURIComponent(versionName)}&pipelineid=${encodeURIComponent(pipelineId)}` +
         `&display_name=${encodeURIComponent(versionDisplayName)}` +
-        (description ? `&description=${encodeURIComponent(description)}` : ''),
+        (description ? `&description=${encodeURIComponent(description)}` : '') +
+        (codeSourceUrl ? `&code_source_url=${encodeURIComponent(codeSourceUrl)}` : ''),
       {
         body: fd,
         cache: 'no-cache',
@@ -512,6 +598,7 @@ export class Apis {
 
   private static _experimentServiceApi?: ExperimentServiceApi;
   private static _experimentServiceApiV2?: ExperimentServiceApiV2;
+  private static _artifactServiceApiV2?: ArtifactServiceApiV2;
   private static _jobServiceApi?: JobServiceApi;
   private static _recurringRunServiceApi?: RecurringRunServiceApi;
   private static _pipelineServiceApi?: PipelineServiceApi;
@@ -536,6 +623,7 @@ export class Apis {
       throw new Error(
         `Error parsing response for path: ${path}\n\n` +
           `Response was: ${responseText}\n\nError was: ${JSON.stringify(err)}`,
+        { cause: err },
       );
     }
   }

@@ -574,7 +574,7 @@ def get_outputs_for_all_groups(
                 processed_oneofs.add(channel)
 
     # handle dsl.Collected returned from pipeline
-    # TODO: consider migrating dsl.Collected returns to pattern used by dsl.OneOf, where the OneOf constructor returns a parameter/artifact channel, which fits in more cleanly into the existing compiler abtractions
+    # TODO: consider migrating dsl.Collected returns to pattern used by dsl.OneOf, where the OneOf constructor returns a parameter/artifact channel, which fits in more cleanly into the existing compiler abstractions
     for output_key, channel in pipeline_outputs_dict.items():
         if isinstance(channel, for_loop.Collected):
             surfaced_output_name = additional_input_name_for_pipeline_channel(
@@ -691,6 +691,44 @@ def _get_uncommon_ancestors(
     return (group1, group2)
 
 
+def _resolve_dependency_name_to_group_or_task(
+    dependency_name: str,
+    pipeline: pipeline_context.Pipeline,
+    group_name_to_group: Mapping[str, tasks_group.TasksGroup],
+) -> GroupOrTaskType:
+    """Resolves a recorded dependency name to its task or supported group
+    object.
+
+    Raises:
+        ValueError: If the dependency name does not correspond to a task or
+            supported group in the pipeline, if it refers to an unsupported
+            task group, or if it ambiguously refers to both.
+    """
+    is_task = dependency_name in pipeline.tasks
+    is_group = dependency_name in group_name_to_group
+
+    if is_task and is_group:
+        raise ValueError(
+            f'Ambiguous dependency name "{dependency_name}". It matches both '
+            'a task and a group in the pipeline. Please rename either the '
+            'task or the group so that dependency names are unambiguous.')
+
+    if is_task:
+        return pipeline.tasks[dependency_name]
+    if is_group:
+        group = group_name_to_group[dependency_name]
+        if not isinstance(group, tasks_group.ExitHandler):
+            raise ValueError(
+                f'".after()" on task group "{dependency_name}" of type '
+                f'dsl.{group.__class__.__name__} is not supported. Only '
+                'dsl.ExitHandler groups can be used as .after() '
+                'dependencies.')
+        return group
+    raise ValueError(
+        f'Dependency "{dependency_name}" does not exist as either a task or '
+        'a group in the pipeline.')
+
+
 def get_dependencies(
     pipeline: pipeline_context.Pipeline,
     task_name_to_parent_groups: Mapping[str, List[str]],
@@ -720,22 +758,30 @@ def get_dependencies(
         groups/tasks can have dependencies.
 
     Raises:
-        RuntimeError: if a task depends on a task inside a condition or loop
-            group.
+        InvalidTopologyException: if a task depends on a task inside a
+            condition or loop group.
+        ValueError: if a dependency refers to an unknown task or task group,
+            if it refers to an unsupported task group, or if the dependency
+            name ambiguously refers to both.
     """
     dependencies = collections.defaultdict(set)
     for task in pipeline.tasks.values():
-        upstream_task_names: Set[Union[pipeline_task.PipelineTask,
-                                       tasks_group.TasksGroup]] = set()
+        upstream_dependencies: Set[GroupOrTaskType] = set()
         task_condition_inputs = list(condition_channels[task.name])
         all_channels = task.channel_inputs + task_condition_inputs
-        upstream_task_names.update(
+        upstream_dependencies.update(
             {channel.task for channel in all_channels if channel.task})
-        # dependent tasks is tasks on which .after was called and can only be the names of PipelineTasks, not TasksGroups
-        upstream_task_names.update(
-            {pipeline.tasks[after_task] for after_task in task.dependent_tasks})
+        # .after() records dependency names, which may refer to either
+        # PipelineTasks or supported TasksGroups such as dsl.ExitHandler.
+        upstream_dependencies.update({
+            _resolve_dependency_name_to_group_or_task(
+                dependency_name=after_task,
+                pipeline=pipeline,
+                group_name_to_group=group_name_to_group,
+            ) for after_task in task.dependent_tasks
+        })
 
-        for upstream_task in upstream_task_names:
+        for upstream_task in upstream_dependencies:
 
             upstream_names, downstream_names = _get_uncommon_ancestors(
                 task_name_to_parent_groups=task_name_to_parent_groups,
@@ -832,46 +878,45 @@ def _cpu_to_float(cpu: str) -> float:
     return float(cpu[:-1]) / 1000 if cpu.endswith('m') else float(cpu)
 
 
+# Multipliers for every suffix Kubernetes accepts on a resource quantity,
+# longest first so that "Gi" is matched before "G". "K" is kept alongside "k"
+# because KFP accepted it before it was normalized away.
+_MEMORY_SUFFIX_MULTIPLIERS = (
+    ('Ei', constants._EI),
+    ('Pi', constants._PI),
+    ('Ti', constants._TI),
+    ('Gi', constants._GI),
+    ('Mi', constants._MI),
+    ('Ki', constants._KI),
+    ('E', constants._E),
+    ('P', constants._P),
+    ('T', constants._T),
+    ('G', constants._G),
+    ('M', constants._M),
+    ('K', constants._K),
+    ('k', constants._K),
+    ('m', 1e-3),
+    ('u', 1e-6),
+    ('n', 1e-9),
+)
+
+
 # Note that memory_to_float assumes the string has already been validated by the _validate_memory_request_limit method.
 def _memory_to_float(memory: str) -> float:
     """Converts the validated memory request/limit string to its numeric value.
 
     Args:
-        memory: Memory requests or limits. This string should be a number or
-            a number followed by one of "E", "Ei", "P", "Pi", "T", "Ti", "G",
-            "Gi", "M", "Mi", "K", or "Ki".
-    Returns:
-        The numeric value (float) of the memory request/limit.
-    """
-    if memory.endswith('E'):
-        memory = float(memory[:-1]) * constants._E / constants._G
-    elif memory.endswith('Ei'):
-        memory = float(memory[:-2]) * constants._EI / constants._G
-    elif memory.endswith('P'):
-        memory = float(memory[:-1]) * constants._P / constants._G
-    elif memory.endswith('Pi'):
-        memory = float(memory[:-2]) * constants._PI / constants._G
-    elif memory.endswith('T'):
-        memory = float(memory[:-1]) * constants._T / constants._G
-    elif memory.endswith('Ti'):
-        memory = float(memory[:-2]) * constants._TI / constants._G
-    elif memory.endswith('G'):
-        memory = float(memory[:-1])
-    elif memory.endswith('Gi'):
-        memory = float(memory[:-2]) * constants._GI / constants._G
-    elif memory.endswith('M'):
-        memory = float(memory[:-1]) * constants._M / constants._G
-    elif memory.endswith('Mi'):
-        memory = float(memory[:-2]) * constants._MI / constants._G
-    elif memory.endswith('K'):
-        memory = float(memory[:-1]) * constants._K / constants._G
-    elif memory.endswith('Ki'):
-        memory = float(memory[:-2]) * constants._KI / constants._G
-    else:
-        # By default interpret as a plain integer, in the unit of Bytes.
-        memory = float(memory) / constants._G
+        memory: Memory requests or limits, as a Kubernetes quantity.
 
-    return memory
+    Returns:
+        The memory request/limit in gigabytes (float).
+    """
+    for suffix, multiplier in _MEMORY_SUFFIX_MULTIPLIERS:
+        if memory.endswith(suffix):
+            return float(memory[:-len(suffix)]) * multiplier / constants._G
+    # No suffix, so the quantity is a plain byte count. This also covers the
+    # exponent form, such as "1e3", which float() reads directly.
+    return float(memory) / constants._G
 
 
 class KubernetesManifestOptions:

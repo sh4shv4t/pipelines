@@ -1,6 +1,5 @@
 # Kubeflow Pipelines
 
-[![Coverage Status](https://coveralls.io/repos/github/kubeflow/pipelines/badge.svg?branch=master)](https://coveralls.io/github/kubeflow/pipelines?branch=master)
 [![SDK Documentation Status](https://readthedocs.org/projects/kubeflow-pipelines/badge/?version=latest)](https://kubeflow-pipelines.readthedocs.io/en/stable/?badge=latest)
 [![SDK Package version](https://img.shields.io/pypi/v/kfp?color=%2334D058&label=pypi%20package)](https://pypi.org/project/kfp)
 [![SDK Supported Python versions](https://img.shields.io/pypi/pyversions/kfp.svg?color=%2334D058)](https://pypi.org/project/kfp)
@@ -29,8 +28,15 @@ The Kubeflow pipelines service has the following goals:
 
 | Dependency     | Versions         |
 | -------------- |------------------|
-| Argo Workflows | v3.5, v3.6, v3.7 |
+| Argo Workflows | v3.7, v4.1 |
 | MySQL          | v8               |
+
+> **KFP 3.0 compatibility notice:** Argo Workflows 3.x remains supported for KFP 2.x, but is
+> deprecated and will not be supported by Kubeflow Pipelines 3.0. Before upgrading to KFP 3.0,
+> operators must upgrade their Argo Workflows controller to a supported 4.x release listed in this
+> matrix. Follow
+> [the KFP 3.0 compatibility tracking issue](https://github.com/kubeflow/pipelines/issues/14139)
+> for the removal and migration work.
 
 ## Documentation
 

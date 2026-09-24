@@ -19,10 +19,11 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - configmaps
+  resourceNames:
+  - kfp-launcher
   verbs:
   - get
-  - list
 - apiGroups:
   - "kubeflow.org"
   resources:

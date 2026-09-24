@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Dockerfile for building the source code of conformance tests
-FROM golang:1.24-alpine as builder
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
 
 RUN apk update && apk upgrade && \
     apk add --no-cache bash git openssh gcc musl-dev
@@ -23,6 +23,10 @@ WORKDIR /go/src/github.com/kubeflow/pipelines
 COPY ./go.mod ./
 COPY ./go.sum ./
 
+# Fall back to fetching modules directly from source on any module proxy
+# error (the default comma separator only falls back on 404/410), so a
+# transient proxy.golang.org failure cannot fail the build.
+ENV GOPROXY=https://proxy.golang.org|direct
 RUN GO111MODULE=on go mod download
 
 COPY . .
@@ -40,7 +44,7 @@ RUN chmod +x /test/integration/run.sh
 RUN tar -czvf /test.tar.gz /test
 
 
-FROM alpine:3.9
+FROM alpine:3.21
 
 COPY --from=builder /test.tar.gz /
 RUN tar -xzvf /test.tar.gz

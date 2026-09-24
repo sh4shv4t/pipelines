@@ -31,6 +31,8 @@ const (
 
 	// MaxParameterBytesEnvVar is the environment variable name for configuring max parameter bytes.
 	MaxParameterBytesEnvVar = "MAX_PARAMETER_BYTES"
+	// MaxMetricsFileBytesEnvVar configures the maximum uncompressed metrics artifact size.
+	MaxMetricsFileBytesEnvVar = "MAX_METRICS_FILE_BYTES"
 
 	// LabelKeyWorkflowEpoch is a label on a Workflow.
 	// It captures the epoch at which the workflow was scheduled.
@@ -52,9 +54,20 @@ const (
 	// It captures the the name of the Run.
 	AnnotationKeyRunName = "pipelines.kubeflow.org/run_name"
 
+	// AnnotationKeyRetryGeneration is stamped on a retried Workflow with the
+	// RetryGeneration claim token from ClaimRunForRetry. ReportWorkflowResource
+	// compares it against the run's current generation to fence terminal
+	// reports from stale pre-retry workflow snapshots.
+	AnnotationKeyRetryGeneration = "pipelines.kubeflow.org/retry-generation"
+
 	AnnotationKeyIstioSidecarInject           = "sidecar.istio.io/inject"
 	AnnotationValueIstioSidecarInjectEnabled  = "true"
 	AnnotationValueIstioSidecarInjectDisabled = "false"
+
+	// AnnotationKeyRuntimeRole is set on compiled Argo Workflow templates to
+	// identify the logical role of the pod (driver, launcher, etc.).  It is
+	// used by UpsertRuntimeEnvVars to target the right containers.
+	AnnotationKeyRuntimeRole = "pipelines.kubeflow.org/runtime-role"
 
 	// LabelKeyCacheEnabled is a workflow label key.
 	// It captures whether this step will be selected by cache service.
@@ -72,6 +85,19 @@ func GetMaxParameterBytes() int {
 		}
 	}
 	return defaultMaxParameterBytes
+}
+
+// GetMaxMetricsFileBytes returns the maximum uncompressed byte size of a
+// metrics artifact. One MiB comfortably exceeds the meaningful payload for 50
+// scalar metrics while bounding pathological JSON whitespace and encoding.
+func GetMaxMetricsFileBytes() int64 {
+	const defaultMaxMetricsFileBytes int64 = 1 << 20
+	if envValue := os.Getenv(MaxMetricsFileBytesEnvVar); envValue != "" {
+		if value, err := strconv.ParseInt(envValue, 10, 64); err == nil && value > 0 {
+			return value
+		}
+	}
+	return defaultMaxMetricsFileBytes
 }
 
 // MaxParameterBytes is the maximum byte size of the parameter column in package/pipeline DB.

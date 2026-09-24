@@ -16,7 +16,6 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { V2beta1Pipeline, V2beta1PipelineVersion } from 'src/apisv2beta1/pipeline';
 import { testBestPractices } from 'src/TestUtils';
 import { PipelineVersionCard } from './PipelineVersionCard';
@@ -27,6 +26,7 @@ const TEST_PIPELINE_ID = 'pipeline-id';
 
 const OLD_TEST_PIPELINE_VERSION_ID = 'old-version-id';
 const OLD_TEST_PIPELINE_VERSION: V2beta1PipelineVersion = {
+  code_source_url: 'https://github.com/kubeflow/pipelines',
   created_at: new Date('2021-11-24T20:58:23.000Z'),
   description: 'This is old version description.',
   display_name: OLD_VERSION_NAME,
@@ -62,7 +62,7 @@ describe('PipelineVersionCard', () => {
         pipeline={TEST_PIPELINE}
         selectedVersion={OLD_TEST_PIPELINE_VERSION}
         versions={TEST_PIPELINE_VERSIONS_LIST}
-        handleVersionSelected={versionId => {
+        handleVersionSelected={(versionId) => {
           return Promise.resolve();
         }}
       ></PipelineVersionCard>,
@@ -78,15 +78,15 @@ describe('PipelineVersionCard', () => {
         pipeline={TEST_PIPELINE}
         selectedVersion={OLD_TEST_PIPELINE_VERSION}
         versions={TEST_PIPELINE_VERSIONS_LIST}
-        handleVersionSelected={versionId => {
+        handleVersionSelected={(versionId) => {
           return Promise.resolve();
         }}
       ></PipelineVersionCard>,
     );
 
-    userEvent.click(screen.getByText('Show Summary'));
+    await userEvent.click(screen.getByText('Show Summary'));
     expect(screen.queryByText('Show Summary')).toBeNull();
-    userEvent.click(screen.getByText('Hide'));
+    await userEvent.click(screen.getByText('Hide'));
     screen.getByText('Show Summary');
   });
 
@@ -96,23 +96,47 @@ describe('PipelineVersionCard', () => {
         pipeline={TEST_PIPELINE}
         selectedVersion={OLD_TEST_PIPELINE_VERSION}
         versions={TEST_PIPELINE_VERSIONS_LIST}
-        handleVersionSelected={versionId => {
+        handleVersionSelected={(versionId) => {
           return Promise.resolve();
         }}
       ></PipelineVersionCard>,
     );
 
-    userEvent.click(screen.getByText('Show Summary'));
+    await userEvent.click(screen.getByText('Show Summary'));
 
     screen.getByText('Pipeline ID');
     screen.getByText(TEST_PIPELINE_ID);
     screen.getByText('Version');
     screen.getByText(OLD_VERSION_NAME);
-    screen.getByText('Version source');
+    const versionSource = screen.getByText('Version source');
+    expect(versionSource).toHaveAttribute('href', 'https://github.com/kubeflow/pipelines');
     screen.getByText('Uploaded on');
     screen.getByText('Pipeline Description');
     screen.getByText('This is pipeline level description.');
     screen.getByText('This is old version description.');
+  });
+
+  it('does not render the Version source link for an unsafe code_source_url scheme', async () => {
+    render(
+      <PipelineVersionCard
+        pipeline={TEST_PIPELINE}
+        selectedVersion={{
+          ...OLD_TEST_PIPELINE_VERSION,
+          // eslint-disable-next-line no-script-url
+          code_source_url: 'javascript:alert(1)',
+        }}
+        versions={TEST_PIPELINE_VERSIONS_LIST}
+        handleVersionSelected={(versionId) => {
+          return Promise.resolve();
+        }}
+      ></PipelineVersionCard>,
+    );
+
+    await userEvent.click(screen.getByText('Show Summary'));
+
+    // The summary still renders, but the unsafe link is dropped entirely.
+    screen.getByText('Uploaded on');
+    expect(screen.queryByText('Version source')).toBeNull();
   });
 
   it('shows version list', async () => {
@@ -121,16 +145,16 @@ describe('PipelineVersionCard', () => {
         pipeline={TEST_PIPELINE}
         selectedVersion={OLD_TEST_PIPELINE_VERSION}
         versions={TEST_PIPELINE_VERSIONS_LIST}
-        handleVersionSelected={versionId => {
+        handleVersionSelected={(versionId) => {
           return Promise.resolve();
         }}
       ></PipelineVersionCard>,
     );
 
-    userEvent.click(screen.getByText('Show Summary'));
+    await userEvent.click(screen.getByText('Show Summary'));
 
-    fireEvent.click(getByRole('button', { name: OLD_VERSION_NAME }));
-    fireEvent.click(getByRole('listbox'));
-    getByRole('option', { name: NEW_VERSION_NAME });
+    fireEvent.mouseDown(getByRole('combobox'));
+    await screen.findByRole('listbox');
+    screen.getByRole('option', { name: NEW_VERSION_NAME });
   });
 });

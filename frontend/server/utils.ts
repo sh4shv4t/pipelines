@@ -11,7 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-import { readFileSync } from 'fs';
+import { constants as fsConstants, promises as fsPromises, readFileSync } from 'fs';
+import type { FileHandle } from 'fs/promises';
 import { Transform, TransformOptions } from 'stream';
 import { posix as path } from 'path';
 
@@ -85,7 +86,7 @@ export function parseJSONString<T>(str: string) {
  *  - containerNames optional, will match to find container or container[0] in pod will be used
  *  - volumeMountName container volume mount name
  *  - filePathInVolume file path in volume
- * @return [final file path, error message if check failed]
+ * @return [final file path, error message if check failed, normalized volume mount root]
  */
 export function findFileOnPodVolume(
   pod: any,
@@ -94,14 +95,15 @@ export function findFileOnPodVolume(
     volumeMountName: string;
     filePathInVolume: string;
   },
-): [string, string | undefined] {
+): [string, string | undefined, string?] {
   const { containerNames, volumeMountName, filePathInVolume } = options;
 
   const volumes = pod?.spec?.volumes;
-  const prefixErrorMessage = `Cannot find file "volume://${volumeMountName}/${filePathInVolume}" in pod "${pod
-    ?.metadata?.name || 'unknown'}":`;
+  const prefixErrorMessage = `Cannot find file "volume://${volumeMountName}/${filePathInVolume}" in pod "${
+    pod?.metadata?.name || 'unknown'
+  }":`;
   // volumes not specified or volume named ${volumeMountName} not specified
-  if (!Array.isArray(volumes) || !volumes.find(v => v?.name === volumeMountName)) {
+  if (!Array.isArray(volumes) || !volumes.find((v) => v?.name === volumeMountName)) {
     return ['', `${prefixErrorMessage} volume "${volumeMountName}" not configured`];
   }
 
@@ -130,14 +132,14 @@ export function findFileOnPodVolume(
   }
 
   // find volumes mount
-  const volumeMount = volumeMounts.find(v => {
+  const volumeMount = volumeMounts.find((v) => {
     // volume name must be same
     if (v?.name !== volumeMountName) {
       return false;
     }
     // if volume subPath set, volume subPath must be prefix of key
     if (v?.subPath) {
-      return filePathInVolume.startsWith(v.subPath);
+      return isVolumePathInsideSubPath(filePathInVolume, v.subPath);
     }
     return true;
   });
@@ -157,9 +159,9 @@ export function findFileOnPodVolume(
   });
 
   if (err) {
-    return ['', `${prefixErrorMessage}  err`];
+    return ['', `${prefixErrorMessage} ${err}`];
   }
-  return [filePath, undefined];
+  return [filePath, undefined, path.normalize(volumeMount.mountPath)];
 }
 
 export function resolveFilePathOnVolume(volume: {
@@ -168,19 +170,165 @@ export function resolveFilePathOnVolume(volume: {
   volumeMountSubPath: string | undefined;
 }): [string, string | undefined] {
   const { filePathInVolume, volumeMountPath, volumeMountSubPath } = volume;
-  if (!volumeMountSubPath) {
-    return [path.join(volumeMountPath, filePathInVolume), undefined];
+  const [safeFilePathInVolume, filePathErr] = normalizeRelativeVolumePath(
+    filePathInVolume,
+    'file path',
+  );
+  if (filePathErr) {
+    return ['', filePathErr];
   }
-  if (filePathInVolume.startsWith(volumeMountSubPath)) {
-    return [
-      path.join(volumeMountPath, filePathInVolume.substring(volumeMountSubPath.length)),
-      undefined,
-    ];
+  const safeVolumeMountPath = path.normalize(volumeMountPath);
+  if (!path.isAbsolute(safeVolumeMountPath)) {
+    return ['', `Volume mount path ${volumeMountPath} must be absolute`];
+  }
+  if (!volumeMountSubPath) {
+    return [path.join(safeVolumeMountPath, safeFilePathInVolume), undefined];
+  }
+  const [safeVolumeMountSubPath, subPathErr] = normalizeRelativeVolumePath(
+    volumeMountSubPath,
+    'volume mount subpath',
+  );
+  if (subPathErr) {
+    return ['', subPathErr];
+  }
+  if (
+    safeFilePathInVolume === safeVolumeMountSubPath ||
+    safeFilePathInVolume.startsWith(`${safeVolumeMountSubPath}/`)
+  ) {
+    const relativePath =
+      safeFilePathInVolume === safeVolumeMountSubPath
+        ? ''
+        : safeFilePathInVolume.substring(safeVolumeMountSubPath.length + 1);
+    return [path.join(safeVolumeMountPath, relativePath), undefined];
   }
   return [
     '',
     `File ${filePathInVolume} not mounted, expecting the file to be inside volume mount subpath ${volumeMountSubPath}`,
   ];
+}
+
+export interface OpenFileWithinRootError {
+  message: string;
+  pathEscaped: boolean;
+}
+
+export async function openFileWithinRoot(
+  filePath: string,
+  rootPath: string,
+): Promise<[FileHandle | undefined, OpenFileWithinRootError | undefined]> {
+  let fileHandle: FileHandle | undefined;
+  try {
+    const [realFilePath, realRootPath] = await Promise.all([
+      fsPromises.realpath(filePath),
+      fsPromises.realpath(rootPath),
+    ]);
+    if (!isPathWithinRoot(realFilePath, realRootPath)) {
+      return [
+        undefined,
+        {
+          message: `File ${filePath} resolves outside volume mount ${rootPath}`,
+          pathEscaped: true,
+        },
+      ];
+    }
+
+    fileHandle = await fsPromises.open(realFilePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const openedFilePath = await resolveOpenedFilePath(fileHandle, realFilePath, filePath);
+    if (!isPathWithinRoot(openedFilePath, realRootPath)) {
+      await fileHandle.close();
+      return [
+        undefined,
+        {
+          message: `Opened file ${filePath} resolves outside volume mount ${rootPath}`,
+          pathEscaped: true,
+        },
+      ];
+    }
+    return [fileHandle, undefined];
+  } catch (error) {
+    await fileHandle?.close().catch(() => undefined);
+    return [
+      undefined,
+      {
+        message: `Failed to open file ${filePath} inside volume mount ${rootPath}: ${error}`,
+        pathEscaped: false,
+      },
+    ];
+  }
+}
+
+async function resolveOpenedFilePath(
+  fileHandle: FileHandle,
+  realFilePath: string,
+  requestedFilePath: string,
+): Promise<string> {
+  if (process.platform === 'linux') {
+    // Validate the descriptor itself so a mutable path cannot be swapped between
+    // open(), realpath(), and stat(). KFP's frontend server is deployed on Linux.
+    return fsPromises.readlink(`/proc/self/fd/${fileHandle.fd}`);
+  }
+
+  // Keep local development on non-Linux hosts working where /proc is unavailable.
+  const [openedFileStat, currentRealFilePath] = await Promise.all([
+    fileHandle.stat(),
+    fsPromises.realpath(realFilePath),
+  ]);
+  const currentFileStat = await fsPromises.stat(currentRealFilePath);
+  if (openedFileStat.dev !== currentFileStat.dev || openedFileStat.ino !== currentFileStat.ino) {
+    throw new Error(`File ${requestedFilePath} changed while it was being opened`);
+  }
+  return currentRealFilePath;
+}
+
+function isPathWithinRoot(filePath: string, rootPath: string): boolean {
+  const relativeFilePath = path.relative(rootPath, filePath);
+  return (
+    relativeFilePath !== '..' &&
+    !relativeFilePath.startsWith('../') &&
+    !path.isAbsolute(relativeFilePath)
+  );
+}
+
+function normalizeRelativeVolumePath(
+  filePath: string,
+  pathLabel: string,
+): [string, string | undefined] {
+  if (filePath.includes('\0')) {
+    return ['', `Invalid ${pathLabel} ${filePath}`];
+  }
+  if (!filePath) {
+    return ['', undefined];
+  }
+  if (path.isAbsolute(filePath)) {
+    return ['', `${pathLabel} ${filePath} must be relative`];
+  }
+  const segments = filePath.split('/');
+  if (segments.some((segment) => segment === '..')) {
+    return ['', `${pathLabel} ${filePath} must not contain parent directory segments`];
+  }
+  const normalized = path.normalize(filePath);
+  if (normalized === '.' || normalized.startsWith('../') || normalized === '..') {
+    return ['', `Invalid ${pathLabel} ${filePath}`];
+  }
+  return [normalized, undefined];
+}
+
+function isVolumePathInsideSubPath(filePathInVolume: string, volumeMountSubPath: string): boolean {
+  const [safeFilePathInVolume, filePathErr] = normalizeRelativeVolumePath(
+    filePathInVolume,
+    'file path',
+  );
+  const [safeVolumeMountSubPath, subPathErr] = normalizeRelativeVolumePath(
+    volumeMountSubPath,
+    'volume mount subpath',
+  );
+  if (filePathErr || subPathErr) {
+    return false;
+  }
+  return (
+    safeFilePathInVolume === safeVolumeMountSubPath ||
+    safeFilePathInVolume.startsWith(`${safeVolumeMountSubPath}/`)
+  );
 }
 
 export interface PreviewStreamOptions extends TransformOptions {
@@ -256,23 +404,72 @@ function parseGenericError(error: any): ErrorDetails | undefined {
   return undefined;
 }
 async function parseKfpApiError(error: any): Promise<ErrorDetails | undefined> {
-  if (!error || !error.json || typeof error.json !== 'function') {
+  if (!error) {
     return undefined;
   }
-  try {
-    const json = await error.json();
-    const { error: message, details } = json;
-    if (message && details && typeof message === 'string' && typeof details === 'object') {
-      return {
-        message,
-        additionalInfo: details,
-      };
-    } else {
+
+  // Swagger client throws the fetch response directly (with json()).
+  // OpenAPI client throws ResponseError with response at error.response.
+  const response =
+    error && typeof error.json === 'function'
+      ? error
+      : error.response && typeof error.response.json === 'function'
+        ? error.response
+        : undefined;
+
+  if (!response) {
+    return undefined;
+  }
+
+  const canClone = typeof response.clone === 'function';
+
+  if (!canClone && typeof response.text === 'function') {
+    try {
+      // Without clone(), read the body once as text so we can recover both JSON
+      // and plain-text error payloads from the same buffer.
+      const text = await response.text();
+      const parsed = parseJSONString<{ error?: string; details?: any }>(text);
+      if (parsed && typeof parsed.error === 'string') {
+        return { message: parsed.error, additionalInfo: parsed.details ?? parsed };
+      }
+      if (text) {
+        return { message: text, additionalInfo: text };
+      }
+      return undefined;
+    } catch (_err) {
       return undefined;
     }
-  } catch (err) {
+  }
+
+  try {
+    const jsonSource = canClone ? response.clone() : response;
+    const json = await jsonSource.json();
+    const { error: message, details } = json;
+    if (typeof message === 'string') {
+      return {
+        message,
+        additionalInfo: details ?? json,
+      };
+    }
+  } catch (_err) {
+    // Fall through and try parsing response text.
+  }
+
+  try {
+    const textSource = canClone ? response.clone() : response;
+    const text = await textSource.text();
+    const parsed = parseJSONString<{ error?: string; details?: any }>(text);
+    if (parsed && typeof parsed.error === 'string') {
+      return { message: parsed.error, additionalInfo: parsed.details ?? parsed };
+    }
+    if (text) {
+      return { message: text, additionalInfo: text };
+    }
+  } catch (_err) {
     return undefined;
   }
+
+  return undefined;
 }
 function parseK8sError(error: any): ErrorDetails | undefined {
   if (!error || !error.body || typeof error.body !== 'object') {
@@ -301,6 +498,11 @@ function parseK8sError(error: any): ErrorDetails | undefined {
   };
 }
 
-export function isAllowedResourceName(name: string): boolean {
-  return name.length > 0 && name.length <= 63 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name);
+export function isAllowedResourceName(name: unknown): name is string {
+  return (
+    typeof name === 'string' &&
+    name.length > 0 &&
+    name.length <= 63 &&
+    /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)
+  );
 }

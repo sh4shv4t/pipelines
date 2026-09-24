@@ -38,7 +38,7 @@ var randomName string
 var experimentID *string = nil
 var userToken string
 
-const maxPipelineWaitTime = 540 // In Seconds
+const maxPipelineWaitTime = 720 // In Seconds
 
 var (
 	pipelineUploadClient apiserver.PipelineUploadInterface
@@ -119,7 +119,7 @@ var _ = BeforeSuite(func() {
 		*config.UploadPipelinesWithKubernetes,
 		*config.KubeflowMode,
 		*config.DebugMode,
-		*config.AuthToken,
+		userToken,
 		*config.Namespace,
 		clientConfig,
 		tlsCfg,

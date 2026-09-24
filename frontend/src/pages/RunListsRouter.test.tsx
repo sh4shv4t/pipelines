@@ -14,29 +14,29 @@
  * limitations under the License.
  */
 
-import { render, screen } from '@testing-library/react';
-import produce from 'immer';
+import { render, screen, waitFor } from '@testing-library/react';
+import { produce } from 'immer';
 import RunListsRouter, { RunListsRouterProps } from './RunListsRouter';
-import React from 'react';
 import { RouteParams } from 'src/components/Router';
 import { V2beta1Run, V2beta1RunStorageState } from 'src/apisv2beta1/run';
 import { ApiExperiment } from 'src/apis/experiment';
 import { Apis } from 'src/lib/Apis';
 import * as Utils from 'src/lib/Utils';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { PredicateOp } from 'src/apis/filter';
 
 describe('RunListsRouter', () => {
-  let historyPushSpy: any;
+  let navigateSpy: any;
   let runStorageState = V2beta1RunStorageState.AVAILABLE;
 
-  const onSelectionChangeMock = jest.fn();
-  const listRunsSpy = jest.spyOn(Apis.runServiceApiV2, 'listRuns');
-  const getRunSpy = jest.spyOn(Apis.runServiceApiV2, 'getRun');
-  const getPipelineSpy = jest.spyOn(Apis.pipelineServiceApi, 'getPipeline');
-  const getExperimentSpy = jest.spyOn(Apis.experimentServiceApi, 'getExperiment');
-  const formatDateStringSpy = jest.spyOn(Utils, 'formatDateString');
-  const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => null);
+  const onSelectionChangeMock = vi.fn();
+  const listRunsSpy = vi.spyOn(Apis.runServiceApiV2, 'listRuns');
+  const getRunSpy = vi.spyOn(Apis.runServiceApiV2, 'getRun');
+  const getPipelineSpy = vi.spyOn(Apis.pipelineServiceApi, 'getPipeline');
+  const getExperimentSpy = vi.spyOn(Apis.experimentServiceApi, 'getExperiment');
+  const listExperimentsSpy = vi.spyOn(Apis.experimentServiceApiV2, 'listExperiments');
+  const formatDateStringSpy = vi.spyOn(Utils, 'formatDateString');
+  const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => null);
 
   const MOCK_EXPERIMENT = newMockExperiment();
   const archiveRunDisplayName = 'run with id: achiverunid';
@@ -52,7 +52,7 @@ describe('RunListsRouter', () => {
 
   function generateProps(): RunListsRouterProps {
     const runListsRouterProps: RunListsRouterProps = {
-      onTabSwitch: jest.fn((newTab: number) => {
+      onTabSwitch: vi.fn((newTab: number) => {
         // this.refresh();
         if (newTab === 1) {
           runStorageState = V2beta1RunStorageState.ARCHIVED;
@@ -61,9 +61,9 @@ describe('RunListsRouter', () => {
         }
       }),
       hideExperimentColumn: true,
-      history: { push: historyPushSpy } as any,
+      navigate: navigateSpy,
       location: '' as any,
-      match: { params: { [RouteParams.experimentId]: MOCK_EXPERIMENT.id } } as any,
+      params: { [RouteParams.experimentId]: MOCK_EXPERIMENT.id } as any,
       onSelectionChange: onSelectionChangeMock,
       selectedIds: [],
       storageState: runStorageState,
@@ -79,9 +79,9 @@ describe('RunListsRouter', () => {
   }
 
   beforeEach(() => {
-    getRunSpy.mockImplementation(id =>
+    getRunSpy.mockImplementation((id) =>
       Promise.resolve(
-        produce({} as Partial<V2beta1Run>, draft => {
+        produce({} as Partial<V2beta1Run>, (draft) => {
           draft = draft || {};
           draft.run_id = id;
           draft.display_name = 'run with id: ' + id;
@@ -122,16 +122,17 @@ describe('RunListsRouter', () => {
     });
     getPipelineSpy.mockImplementation(() => ({ name: 'some pipeline' }));
     getExperimentSpy.mockImplementation(() => ({ name: 'some experiment' }));
+    listExperimentsSpy.mockResolvedValue({ experiments: [] });
     formatDateStringSpy.mockImplementation((date?: Date) => {
       return date ? '1/2/2019, 12:34:56 PM' : '-';
     });
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
 
-  it('shows Active and Archive tabs', () => {
+  it('shows Active and Archive tabs', async () => {
     render(
       <BrowserRouter>
         <RunListsRouter {...generateProps()} />
@@ -140,5 +141,6 @@ describe('RunListsRouter', () => {
 
     screen.getByText('Active');
     screen.getByText('Archived');
+    await waitFor(() => screen.getByText(activeRunDisplayName));
   });
 });
